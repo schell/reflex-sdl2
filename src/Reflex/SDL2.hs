@@ -10,8 +10,18 @@
 {-# LANGUAGE TypeFamilies          #-}
 -- | This module contains the bare minimum needed to get started writing
 -- reflex apps using sdl2.
+--
+-- For a tutorial see
+-- [app/Main.hs](https://github.com/reflex-frp/reflex-sdl2/blob/master/app/Main.hs)
 module Reflex.SDL2
-  ( module Reflex.SDL2
+  ( -- * All SDL events, packaged into reflex events
+    SystemEvents(..)
+    -- * Running an app
+  , host
+    -- * Debugging
+  , putDebugLnE
+    -- * Convenience constraints
+  , ReflexSDL2
     -- * Re-exports
   , module Reflex
   , module SDL
@@ -36,13 +46,20 @@ import           SDL                    hiding (Event)
 
 ------------------------------------------------------------------------------
 -- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:
--- - An event for *any* SDL2 event payload.
--- - An event for reflex's post network build event.
--- - An event for each frame tick.
+--
+-- An event for *any* SDL2 event payload.
+--
+-- An event for reflex's post network build event.
+--
+-- An event for each frame tick.
 data SystemEvents t = SystemEvents
   { sysPostBuildEvent                 :: Event t ()
+  -- ^ Fired just after the FRP network is built.
   , sysTicksEvent                     :: Event t Word32
+  -- ^ Fired once per frame tick, contains the number of
+  -- milliseconds since SDL library initialization.
   , sysAnySDLEvent                    :: Event t EventPayload
+  -- ^ Fired when SDL receives any event.
   , sysWindowShownEvent               :: Event t WindowShownEventData
   , sysWindowHiddenEvent              :: Event t WindowHiddenEventData
   , sysWindowExposedEvent             :: Event t WindowExposedEventData
