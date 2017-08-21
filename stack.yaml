@@ -38,20 +38,12 @@ resolver: lts-9.0
 packages:
 - '.'
 - location:
-    git: https://github.com/schell/glucose/
-    commit: 1f3b6309e8b0fa6219f489cc2f6f3367aaa59a75
-  subdirs:
-  - glucose
-  - gristle
-  extra-dep: true
-- location:
     git: https://github.com/reflex-frp/reflex
     commit: a6ee264850cf80c55e8fed99575107a44af57081
   extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
-extra-deps: 
-- indexed-0.1.3
+extra-deps:
 - prim-uniq-0.1.0.1
 - ref-tf-0.4.0.1
 
