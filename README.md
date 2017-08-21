@@ -30,7 +30,8 @@ This project uses [stack][3] for building. From the project directory:
 
 ## examples
 
-You can view an example using the built-in 2d renderer in [app/Main.hs]().
+You can view an example using the built-in 2d renderer in
+[app/Main.hs](https://github.com/schell/reflex-sdl2/blob/master/app/Main.hs).
 To run the example do:
 
     stack build
