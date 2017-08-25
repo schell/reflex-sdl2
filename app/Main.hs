@@ -1,10 +1,12 @@
 {-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE ScopedTypeVariables      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 module Main where
 
 import           Control.Monad (forM_, void)
 import           Reflex.SDL2
+import           Reflex.SDL2.MonadLayered
 import           System.Exit   (exitSuccess)
 
 
@@ -22,49 +24,40 @@ motionToColor Released = V4 255 255 0   128
 motionToColor Pressed  = V4 255 0   255 128
 
 
-renderAABBs :: MonadIO m => Maybe Renderer -> [AABB] -> Maybe (m ())
-renderAABBs mayRenderer aabbs = ffor mayRenderer $ \r -> do
-  rendererDrawColor r $= V4 0 0 0 255
-  clear r
-  forM_ aabbs $ \(AABB motion pos) -> do
-    let color = motionToColor motion
-    rendererDrawColor r $= (fromIntegral <$> color)
-    fillRect r $ Just $ Rectangle (P $ fromIntegral <$> pos - 10) 20
-  present r
+renderAABB :: MonadIO m => Renderer -> V4 Int -> V2 Int -> m ()
+renderAABB r color pos = do
+  rendererDrawColor r $= (fromIntegral <$> color)
+  fillRect r $ Just $ Rectangle (P $ fromIntegral <$> pos - 10) 20
 
 
-guest :: ReflexSDL2 t m => m ()
-guest = do
+guest :: MonadLayered t [Performable m ()] m => Renderer -> m ()
+guest r = do
   -- Print some stuff after the network is built.
   evPB <- asks sysPostBuildEvent
   performEvent_ $ ffor evPB $ \() ->
     liftIO $ putStrLn "starting up..."
 
-  -- Get the window shown event and use it to create a renderer event.
-  -- We use 'headE' because we only want to create one renderer, ever.
-  evWindow   <- headE =<< asks (fmap windowShownEventWindow . sysWindowShownEvent)
-  evRenderer <- performEvent $ ffor evWindow $ \window -> do
-    liftIO $ putStrLn "creating renderer..."
-    r <- createRenderer window (-1) defaultRenderer
-    rendererDrawBlendMode r $= BlendAdditive
-    return r
-
   -- Get any mouse button event and accumulate them as a list of
   -- AABBs. Then combine the dynamic list of AABBs with the renderer
   -- to perform a rendering event.
   evMouseButton <- asks sysMouseButtonEvent
-  dAABBs        <- foldDyn (:) [] $ mouseButtonToAABB <$> evMouseButton
-  dMayRenderer  <- holdDyn Nothing $ Just <$> evRenderer
-  let dRendering  = renderAABBs <$> dMayRenderer <*> dAABBs
-      evRendering = fmapMaybe id $ updated dRendering
-  performEvent_ evRendering
+  tellEvent $ ffor evMouseButton $ \dat -> pure $ do
+    let AABB motion pos = mouseButtonToAABB dat
+        color = motionToColor motion
+    renderAABB r color pos
+
+  evMouseMove <- asks sysMouseMotionEvent
+  dMoves      <- foldDyn (\x xs -> take 100 $ x : xs) [] evMouseMove
+  tellEvent $ ffor (updated dMoves) $ map $ \dat -> do
+    let P pos = fromIntegral <$> mouseMotionEventPos dat
+        color = V4 255 255 255 255
+    renderAABB r color pos
 
   -- Quit on any quit event.
   evQuit <- asks sysQuitEvent
   performEvent_ $ ffor evQuit $ \() -> liftIO $ do
     putStrLn "bye!"
     exitSuccess
-
 
 main :: IO ()
 main = do
@@ -75,5 +68,17 @@ main = do
                          , windowHighDPI     = False
                          , windowInitialSize = V2 640 480
                          }
-  createWindow "reflex-sdl2-exe" cfg >>= void . glCreateContext
-  host guest
+  window <- createWindow "reflex-sdl2-exe" cfg
+  void $ glCreateContext window
+
+  putStrLn "creating renderer..."
+  r <- createRenderer window (-1) defaultRenderer
+  rendererDrawBlendMode r $= BlendAdditive
+
+  host $ do
+    (_, evLayers) <- runEventWriterT $ guest r
+    performEvent_ $ ffor evLayers $ \layers -> do
+      rendererDrawColor r $= V4 0 0 0 255
+      clear r
+      sequence_ layers
+      present r

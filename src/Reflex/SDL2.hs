@@ -6,7 +6,7 @@
 -- | This module contains the bare minimum needed to get started writing
 -- reflex apps using sdl2.
 --
--- For a tutorial see
+-- For an example see
 -- [app/Main.hs](https://github.com/reflex-frp/reflex-sdl2/blob/master/app/Main.hs)
 module Reflex.SDL2
   ( -- * All SDL events, packaged into reflex events
