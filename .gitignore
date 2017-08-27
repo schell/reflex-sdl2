@@ -1,6 +1,7 @@
 dist
 dist-*
 cabal-dev
+result
 *.o
 *.hi
 *.chi
@@ -18,3 +19,4 @@ cabal.sandbox.config
 .stack-work/
 cabal.project.local
 .HTF/
+.#*

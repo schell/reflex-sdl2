@@ -16,12 +16,15 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Reflex.SDL2
-  build-depends:       base >= 4.7 && < 5
-                     , dependent-sum >= 0.4
-                     , mtl >= 2.2.1
-                     , reflex
-                     , ref-tf
-                     , sdl2
+  other-modules:       Reflex.SDL2.Internal
+  build-depends:       base                   >= 4.7   && < 5
+                     , dependent-sum          >= 0.4   && < 0.5
+                     , exception-transformers >= 0.4   && < 0.5
+                     , mtl                    >= 2.2   && < 2.3
+                     , primitive              >= 0.6   && < 0.7
+                     , reflex                 >= 0.5   && < 0.6
+                     , ref-tf                 >= 0.4   && < 0.5
+                     , sdl2                   >= 2.2   && < 2.3
   default-language:    Haskell2010
 
 executable reflex-sdl2-exe
