@@ -1,22 +1,33 @@
-{-# LANGUAGE ConstraintKinds       #-}
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE ConstraintKinds            #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE KindSignatures             #-}
+{-# LANGUAGE LambdaCase                 #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE TypeFamilies               #-}
 -- | This module contains the bare minimum needed to get started writing
 -- reflex apps using sdl2.
 --
--- For a tutorial see
+-- For an example see
 -- [app/Main.hs](https://github.com/reflex-frp/reflex-sdl2/blob/master/app/Main.hs)
 module Reflex.SDL2
-  ( -- * All SDL events, packaged into reflex events
-    SystemEvents(..)
+  ( -- * Convenience constraints
+    ReflexSDL2
     -- * Running an app
   , host
+    -- * All SDL events, packaged into reflex events
+  , SystemEvents(..)
+    -- * Higher order switching
+  , holdView
+  , dynView
+    -- * Common Events and Dynamics
+  , getDeltaTickEvent
     -- * Debugging
   , putDebugLnE
-    -- * Convenience constraints
-  , ReflexSDL2
     -- * Re-exports
   , module Reflex
   , module SDL
@@ -26,174 +37,168 @@ module Reflex.SDL2
   , liftIO
   ) where
 
-import           Control.Monad.Fix      (MonadFix)
-import           Control.Monad.Identity (Identity (..))
-import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Control.Monad.Reader   (MonadReader, ReaderT (..), asks,
-                                         runReaderT)
-import           Control.Monad.Ref
-import           Data.Dependent.Sum     (DSum ((:=>)))
-import           Data.Function          (fix)
-import           Data.Word              (Word32)
-import           Reflex                 hiding (Additive)
+import           Control.Monad           (forM_, void)
+import           Control.Monad.Exception (MonadException)
+import           Control.Monad.Fix       (MonadFix)
+import           Control.Monad.Identity  (Identity (..))
+import           Control.Monad.IO.Class  (MonadIO, liftIO)
+import           Control.Monad.Primitive (PrimMonad)
+import           Control.Monad.Reader
+import           Control.Monad.Ref       (Ref, readRef)
+import           Data.Dependent.Sum      (DSum ((:=>)))
+import           Data.Function           (fix)
+import           Data.Word               (Word32)
+import           Reflex                  hiding (Additive)
 import           Reflex.Host.Class
-import           SDL                    hiding (Event)
+import           SDL                     hiding (Event)
+
+import           Reflex.SDL2.Internal    as RSDL2 hiding (sysPostBuildEvent)
+import           Reflex.SDL2.Internal    (sysPostBuildEvent)
+import           Reflex.Spider.Internal  (HasSpiderTimeline)
+
 
 ------------------------------------------------------------------------------
--- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:
---
--- An event for *any* SDL2 event payload.
---
--- An event for reflex's post network build event.
---
--- An event for each frame tick.
-data SystemEvents t = SystemEvents
-  { sysPostBuildEvent                 :: Event t ()
-  -- ^ Fired just after the FRP network is built.
-  , sysTicksEvent                     :: Event t Word32
-  -- ^ Fired once per frame tick, contains the number of
-  -- milliseconds since SDL library initialization.
-  , sysAnySDLEvent                    :: Event t EventPayload
-  -- ^ Fired when SDL receives any event.
-  , sysWindowShownEvent               :: Event t WindowShownEventData
-  , sysWindowHiddenEvent              :: Event t WindowHiddenEventData
-  , sysWindowExposedEvent             :: Event t WindowExposedEventData
-  , sysWindowMovedEvent               :: Event t WindowMovedEventData
-  , sysWindowResizedEvent             :: Event t WindowResizedEventData
-  , sysWindowSizeChangedEvent         :: Event t WindowSizeChangedEventData
-  , sysWindowMinimizedEvent           :: Event t WindowMinimizedEventData
-  , sysWindowMaximizedEvent           :: Event t WindowMaximizedEventData
-  , sysWindowRestoredEvent            :: Event t WindowRestoredEventData
-  , sysWindowGainedMouseFocusEvent    :: Event t WindowGainedMouseFocusEventData
-  , sysWindowLostMouseFocusEvent      :: Event t WindowLostMouseFocusEventData
-  , sysWindowGainedKeyboardFocusEvent :: Event t WindowGainedKeyboardFocusEventData
-  , sysWindowLostKeyboardFocusEvent   :: Event t WindowLostKeyboardFocusEventData
-  , sysWindowClosedEvent              :: Event t WindowClosedEventData
-  , sysKeyboardEvent                  :: Event t KeyboardEventData
-  , sysTextEditingEvent               :: Event t TextEditingEventData
-  , sysTextInputEvent                 :: Event t TextInputEventData
-  , sysKeymapChangedEvent             :: Event t ()
-  , sysMouseMotionEvent               :: Event t MouseMotionEventData
-  , sysMouseButtonEvent               :: Event t MouseButtonEventData
-  , sysMouseWheelEvent                :: Event t MouseWheelEventData
-  , sysJoyAxisEvent                   :: Event t JoyAxisEventData
-  , sysJoyBallEvent                   :: Event t JoyBallEventData
-  , sysJoyHatEvent                    :: Event t JoyHatEventData
-  , sysJoyButtonEvent                 :: Event t JoyButtonEventData
-  , sysJoyDeviceEvent                 :: Event t JoyDeviceEventData
-  , sysControllerAxisEvent            :: Event t ControllerAxisEventData
-  , sysControllerButtonEvent          :: Event t ControllerButtonEventData
-  , sysControllerDeviceEvent          :: Event t ControllerDeviceEventData
-  , sysAudioDeviceEvent               :: Event t AudioDeviceEventData
-  , sysQuitEvent                      :: Event t ()
-  , sysUserEvent                      :: Event t UserEventData
-  , sysSysWMEvent                     :: Event t SysWMEventData
-  , sysTouchFingerEvent               :: Event t TouchFingerEventData
-  , sysMultiGestureEvent              :: Event t MultiGestureEventData
-  , sysDollarGestureEvent             :: Event t DollarGestureEventData
-  , sysDropEvent                      :: Event t DropEventData
-  , sysClipboardUpdateEvent           :: Event t ()
-  , sysUnknownEvent                   :: Event t UnknownEventData
-  }
+-- | A collection of constraints that represent the default reflex-sdl2 network.
+type ReflexSDL2 t m =
+  ( Reflex t
+  , MonadHold t m
+  , MonadSample t m
+  , MonadAdjust t m
+  , PostBuild t m
+  , PerformEvent t m
+  , MonadFix m
+  , MonadIO m
+  , MonadIO (Performable m)
+  , MonadReader (SystemEvents t) m
+  )
+
+
+------------------------------------------------------------------------------
+-- | Provides a basic implementation of 'ReflexSDL2 t m' constraints.
+newtype ReflexSDL2T t (m :: * -> *) a =
+  ReflexSDL2T { runReflexSDL2T :: ReaderT (SystemEvents t) (PerformEventT t m) a }
+
+deriving instance ReflexHost t => Functor (ReflexSDL2T t m)
+deriving instance ReflexHost t => Applicative (ReflexSDL2T t m)
+deriving instance ReflexHost t => Monad (ReflexSDL2T t m)
+deriving instance ReflexHost t => MonadFix (ReflexSDL2T t m)
+deriving instance ReflexHost t => MonadReader (SystemEvents t) (ReflexSDL2T t m)
+deriving instance (ReflexHost t, MonadIO (HostFrame t)) => MonadIO (ReflexSDL2T t m)
+deriving instance (ReflexHost t, MonadException (HostFrame t)) => MonadException (ReflexSDL2T t m)
+
+
+------------------------------------------------------------------------------
+-- | 'ReflexSDL2T' is an instance of 'PostBuild'.
+instance (Reflex t, ReflexHost t, Monad m) => PostBuild t (ReflexSDL2T t m) where
+  getPostBuild = asks sysPostBuildEvent
+
+
+------------------------------------------------------------------------------
+-- | 'ReflexSDL2T' is an instance of 'PerformEvent'.
+instance ( ReflexHost t
+         , Ref m ~ Ref IO
+         , PrimMonad (HostFrame t)
+         ) => PerformEvent t (ReflexSDL2T t m) where
+  type Performable (ReflexSDL2T t m) = HostFrame t
+  performEvent_ = ReflexSDL2T . lift . performEvent_
+  performEvent  = ReflexSDL2T . lift . performEvent
+
+
+------------------------------------------------------------------------------
+-- | 'ReflexSDL2T' is an instance of 'MonadAdjust'.
+instance ( Reflex t
+         , ReflexHost t
+         , PrimMonad (HostFrame t)
+         ) => MonadAdjust t (ReflexSDL2T t m) where
+  runWithReplace ma evmb =
+    ReflexSDL2T $ runWithReplace (runReflexSDL2T ma) (runReflexSDL2T <$> evmb)
+  traverseDMapWithKeyWithAdjust kvma dMapKV = ReflexSDL2T .
+    traverseDMapWithKeyWithAdjust (\ka -> runReflexSDL2T . kvma ka) dMapKV
+  traverseDMapWithKeyWithAdjustWithMove kvma dMapKV = ReflexSDL2T .
+    traverseDMapWithKeyWithAdjustWithMove (\ka -> runReflexSDL2T . kvma ka) dMapKV
+
+
+------------------------------------------------------------------------------
+-- | 'ReflexSDL2T' is an instance of 'MonadHold'.
+instance ReflexHost t => MonadSample t (ReflexSDL2T t m) where
+  sample = ReflexSDL2T . sample
+
+
+------------------------------------------------------------------------------
+-- | 'ReflexSDL2T' is an instance of 'MonadHold'.
+instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T t m) where
+  hold a = ReflexSDL2T . lift . hold a
+  holdDyn a = ReflexSDL2T . lift . holdDyn a
+  holdIncremental p = ReflexSDL2T . lift . holdIncremental p
+  buildDynamic ma = ReflexSDL2T . lift . buildDynamic ma
+
+
+------------------------------------------------------------------------------
+-- | Returns an event that fires each frame with the number of milliseconds
+-- since the last frame.
+-- Be aware that subscribing to this 'Event' (by using it in a monadic action)
+-- will result in your app running sdl2's event loop every frame.
+getDeltaTickEvent :: ReflexSDL2 t m => m (Event t Word32)
+getDeltaTickEvent = do
+  let f (lastTick, _) thisTick = (thisTick, thisTick - lastTick)
+  evTickAndDel <- accum f (0, 0) =<< asks sysTicksEvent
+  return $ snd <$> evTickAndDel
 
 
 ------------------------------------------------------------------------------
 -- | Host a reflex-sdl2 app.
 host
-  :: ReaderT (SystemEvents Spider) (PerformEventT Spider (SpiderHost Global)) a
+  :: ReflexSDL2T Spider (SpiderHost Global) a
   -- ^ A concrete reflex-sdl2 network to run.
   -> IO ()
 host app = runSpiderHost $ do
   -- Get events and trigger refs for all things that can happen.
-  (evPostBuild,                                      trPostBuildRef) <- newEventWithTriggerRef
-  (evAnySDL,                                            trAnySDLRef) <- newEventWithTriggerRef
-  (evTicks,                                              trTicksRef) <- newEventWithTriggerRef
-  (evWindowShownEvent,                             trWindowShownRef) <- newEventWithTriggerRef
-  (evWindowHiddenEvent,                           trWindowHiddenRef) <- newEventWithTriggerRef
-  (evWindowExposedEvent,                         trWindowExposedRef) <- newEventWithTriggerRef
-  (evWindowMovedEvent,                             trWindowMovedRef) <- newEventWithTriggerRef
-  (evWindowResizedEvent,                         trWindowResizedRef) <- newEventWithTriggerRef
-  (evWindowSizeChangedEvent,                 trWindowSizeChangedRef) <- newEventWithTriggerRef
-  (evWindowMinimizedEvent,                     trWindowMinimizedRef) <- newEventWithTriggerRef
-  (evWindowMaximizedEvent,                     trWindowMaximizedRef) <- newEventWithTriggerRef
-  (evWindowRestoredEvent,                       trWindowRestoredRef) <- newEventWithTriggerRef
-  (evWindowGainedMouseFocusEvent,       trWindowGainedMouseFocusRef) <- newEventWithTriggerRef
-  (evWindowLostMouseFocusEvent,           trWindowLostMouseFocusRef) <- newEventWithTriggerRef
-  (evWindowGainedKeyboardFocusEvent, trWindowGainedKeyboardFocusRef) <- newEventWithTriggerRef
-  (evWindowLostKeyboardFocusEvent,     trWindowLostKeyboardFocusRef) <- newEventWithTriggerRef
-  (evWindowClosedEvent,                           trWindowClosedRef) <- newEventWithTriggerRef
-  (evKeyboardEvent,                                   trKeyboardRef) <- newEventWithTriggerRef
-  (evTextEditingEvent,                             trTextEditingRef) <- newEventWithTriggerRef
-  (evTextInputEvent,                                 trTextInputRef) <- newEventWithTriggerRef
-  (evKeymapChangedEvent,                         trKeymapChangedRef) <- newEventWithTriggerRef
-  (evMouseMotionEvent,                             trMouseMotionRef) <- newEventWithTriggerRef
-  (evMouseButtonEvent,                             trMouseButtonRef) <- newEventWithTriggerRef
-  (evMouseWheelEvent,                               trMouseWheelRef) <- newEventWithTriggerRef
-  (evJoyAxisEvent,                                     trJoyAxisRef) <- newEventWithTriggerRef
-  (evJoyBallEvent,                                     trJoyBallRef) <- newEventWithTriggerRef
-  (evJoyHatEvent,                                       trJoyHatRef) <- newEventWithTriggerRef
-  (evJoyButtonEvent,                                 trJoyButtonRef) <- newEventWithTriggerRef
-  (evJoyDeviceEvent,                                 trJoyDeviceRef) <- newEventWithTriggerRef
-  (evControllerAxisEvent,                       trControllerAxisRef) <- newEventWithTriggerRef
-  (evControllerButtonEvent,                   trControllerButtonRef) <- newEventWithTriggerRef
-  (evControllerDeviceEvent,                   trControllerDeviceRef) <- newEventWithTriggerRef
-  (evAudioDeviceEvent,                             trAudioDeviceRef) <- newEventWithTriggerRef
-  (evQuitEvent,                                           trQuitRef) <- newEventWithTriggerRef
-  (evUserEvent,                                           trUserRef) <- newEventWithTriggerRef
-  (evSysWMEvent,                                         trSysWMRef) <- newEventWithTriggerRef
-  (evTouchFingerEvent,                             trTouchFingerRef) <- newEventWithTriggerRef
-  (evMultiGestureEvent,                           trMultiGestureRef) <- newEventWithTriggerRef
-  (evDollarGestureEvent,                         trDollarGestureRef) <- newEventWithTriggerRef
-  (evDropEvent,                                           trDropRef) <- newEventWithTriggerRef
-  (evClipboardUpdateEvent,                     trClipboardUpdateRef) <- newEventWithTriggerRef
-  (evUnknownEvent,                                     trUnknownRef) <- newEventWithTriggerRef
+  (sysPostBuildEvent,                                 trPostBuildRef) <- newEventWithTriggerRef
+  (sysAnySDLEvent,                                       trAnySDLRef) <- newEventWithTriggerRef
+  (sysTicksEvent,                                         trTicksRef) <- newEventWithTriggerRef
+  (sysWindowShownEvent,                             trWindowShownRef) <- newEventWithTriggerRef
+  (sysWindowHiddenEvent,                           trWindowHiddenRef) <- newEventWithTriggerRef
+  (sysWindowExposedEvent,                         trWindowExposedRef) <- newEventWithTriggerRef
+  (sysWindowMovedEvent,                             trWindowMovedRef) <- newEventWithTriggerRef
+  (sysWindowResizedEvent,                         trWindowResizedRef) <- newEventWithTriggerRef
+  (sysWindowSizeChangedEvent,                 trWindowSizeChangedRef) <- newEventWithTriggerRef
+  (sysWindowMinimizedEvent,                     trWindowMinimizedRef) <- newEventWithTriggerRef
+  (sysWindowMaximizedEvent,                     trWindowMaximizedRef) <- newEventWithTriggerRef
+  (sysWindowRestoredEvent,                       trWindowRestoredRef) <- newEventWithTriggerRef
+  (sysWindowGainedMouseFocusEvent,       trWindowGainedMouseFocusRef) <- newEventWithTriggerRef
+  (sysWindowLostMouseFocusEvent,           trWindowLostMouseFocusRef) <- newEventWithTriggerRef
+  (sysWindowGainedKeyboardFocusEvent, trWindowGainedKeyboardFocusRef) <- newEventWithTriggerRef
+  (sysWindowLostKeyboardFocusEvent,     trWindowLostKeyboardFocusRef) <- newEventWithTriggerRef
+  (sysWindowClosedEvent,                           trWindowClosedRef) <- newEventWithTriggerRef
+  (sysKeyboardEvent,                                   trKeyboardRef) <- newEventWithTriggerRef
+  (sysTextEditingEvent,                             trTextEditingRef) <- newEventWithTriggerRef
+  (sysTextInputEvent,                                 trTextInputRef) <- newEventWithTriggerRef
+  (sysKeymapChangedEvent,                         trKeymapChangedRef) <- newEventWithTriggerRef
+  (sysMouseMotionEvent,                             trMouseMotionRef) <- newEventWithTriggerRef
+  (sysMouseButtonEvent,                             trMouseButtonRef) <- newEventWithTriggerRef
+  (sysMouseWheelEvent,                               trMouseWheelRef) <- newEventWithTriggerRef
+  (sysJoyAxisEvent,                                     trJoyAxisRef) <- newEventWithTriggerRef
+  (sysJoyBallEvent,                                     trJoyBallRef) <- newEventWithTriggerRef
+  (sysJoyHatEvent,                                       trJoyHatRef) <- newEventWithTriggerRef
+  (sysJoyButtonEvent,                                 trJoyButtonRef) <- newEventWithTriggerRef
+  (sysJoyDeviceEvent,                                 trJoyDeviceRef) <- newEventWithTriggerRef
+  (sysControllerAxisEvent,                       trControllerAxisRef) <- newEventWithTriggerRef
+  (sysControllerButtonEvent,                   trControllerButtonRef) <- newEventWithTriggerRef
+  (sysControllerDeviceEvent,                   trControllerDeviceRef) <- newEventWithTriggerRef
+  (sysAudioDeviceEvent,                             trAudioDeviceRef) <- newEventWithTriggerRef
+  (sysQuitEvent,                                           trQuitRef) <- newEventWithTriggerRef
+  (sysUserEvent,                                           trUserRef) <- newEventWithTriggerRef
+  (sysSysWMEvent,                                         trSysWMRef) <- newEventWithTriggerRef
+  (sysTouchFingerEvent,                             trTouchFingerRef) <- newEventWithTriggerRef
+  (sysMultiGestureEvent,                           trMultiGestureRef) <- newEventWithTriggerRef
+  (sysDollarGestureEvent,                         trDollarGestureRef) <- newEventWithTriggerRef
+  (sysDropEvent,                                           trDropRef) <- newEventWithTriggerRef
+  (sysClipboardUpdateEvent,                     trClipboardUpdateRef) <- newEventWithTriggerRef
+  (sysUnknownEvent,                                     trUnknownRef) <- newEventWithTriggerRef
 
   -- Build the network and get our firing command to trigger the post build event.
   (_, FireCommand fire) <-
-    hostPerformEventT $ runReaderT app
-      SystemEvents{ sysPostBuildEvent                 = evPostBuild
-                  , sysAnySDLEvent                    = evAnySDL
-                  , sysTicksEvent                     = evTicks
-                  , sysWindowShownEvent               = evWindowShownEvent
-                  , sysWindowHiddenEvent              = evWindowHiddenEvent
-                  , sysWindowExposedEvent             = evWindowExposedEvent
-                  , sysWindowMovedEvent               = evWindowMovedEvent
-                  , sysWindowResizedEvent             = evWindowResizedEvent
-                  , sysWindowSizeChangedEvent         = evWindowSizeChangedEvent
-                  , sysWindowMinimizedEvent           = evWindowMinimizedEvent
-                  , sysWindowMaximizedEvent           = evWindowMaximizedEvent
-                  , sysWindowRestoredEvent            = evWindowRestoredEvent
-                  , sysWindowGainedMouseFocusEvent    = evWindowGainedMouseFocusEvent
-                  , sysWindowLostMouseFocusEvent      = evWindowLostMouseFocusEvent
-                  , sysWindowGainedKeyboardFocusEvent = evWindowGainedKeyboardFocusEvent
-                  , sysWindowLostKeyboardFocusEvent   = evWindowLostKeyboardFocusEvent
-                  , sysWindowClosedEvent              = evWindowClosedEvent
-                  , sysKeyboardEvent                  = evKeyboardEvent
-                  , sysTextEditingEvent               = evTextEditingEvent
-                  , sysTextInputEvent                 = evTextInputEvent
-                  , sysKeymapChangedEvent             = evKeymapChangedEvent
-                  , sysMouseMotionEvent               = evMouseMotionEvent
-                  , sysMouseButtonEvent               = evMouseButtonEvent
-                  , sysMouseWheelEvent                = evMouseWheelEvent
-                  , sysJoyAxisEvent                   = evJoyAxisEvent
-                  , sysJoyBallEvent                   = evJoyBallEvent
-                  , sysJoyHatEvent                    = evJoyHatEvent
-                  , sysJoyButtonEvent                 = evJoyButtonEvent
-                  , sysJoyDeviceEvent                 = evJoyDeviceEvent
-                  , sysControllerAxisEvent            = evControllerAxisEvent
-                  , sysControllerButtonEvent          = evControllerButtonEvent
-                  , sysControllerDeviceEvent          = evControllerDeviceEvent
-                  , sysAudioDeviceEvent               = evAudioDeviceEvent
-                  , sysQuitEvent                      = evQuitEvent
-                  , sysUserEvent                      = evUserEvent
-                  , sysSysWMEvent                     = evSysWMEvent
-                  , sysTouchFingerEvent               = evTouchFingerEvent
-                  , sysMultiGestureEvent              = evMultiGestureEvent
-                  , sysDollarGestureEvent             = evDollarGestureEvent
-                  , sysDropEvent                      = evDropEvent
-                  , sysClipboardUpdateEvent           = evClipboardUpdateEvent
-                  , sysUnknownEvent                   = evUnknownEvent
-                  }
+    hostPerformEventT $ runReaderT (runReflexSDL2T app) SystemEvents{..}
 
   -- Trigger the post build event.
   (readRef trPostBuildRef >>=) . mapM_ $ \tr ->
@@ -201,8 +206,22 @@ host app = runSpiderHost $ do
 
   ---- Loop forever getting sdl2 events and triggering them.
   fix $ \loop -> do
-    payload <- eventPayload <$> waitEvent
-    case payload of
+    -- Fire any tick events, if anyone is listening.
+    -- If someone _is_ listening, we need to fire an
+    -- event every frame - otherwise we can wait around
+    -- for an sdl event to update the network.
+    shouldWait <- readRef trTicksRef >>= \case
+      Nothing -> return True
+      Just tr -> do
+        t <- ticks
+        void $ fire [tr :=> Identity t] $ return ()
+        return False
+
+    payloads <- if shouldWait
+                then pure . eventPayload <$> waitEvent
+                else map    eventPayload <$> pollEvents
+
+    forM_ payloads $ \case
       WindowShownEvent dat -> (readRef trWindowShownRef >>=) . mapM_ $ \tr ->
         fire [tr :=> Identity dat] $ return ()
       WindowHiddenEvent dat -> (readRef trWindowHiddenRef >>=) . mapM_ $ \tr ->
@@ -284,10 +303,8 @@ host app = runSpiderHost $ do
 
     -- Fire an event for the wrapped payload as well.
     (readRef trAnySDLRef >>=) . mapM_ $ \tr ->
-      fire [tr :=> Identity payload] $ return ()
-    -- Fire any tick events, if anyone is listening.
-    (readRef trTicksRef >>=) . mapM_ $ \tr -> ticks >>= \t ->
-      fire [tr :=> Identity t] $ return ()
+      forM_ payloads $ \payload ->
+        fire [tr :=> Identity payload] $ return ()
 
     loop
 
@@ -304,14 +321,14 @@ putDebugLnE
 putDebugLnE ev showf = performEvent_ $ liftIO . putStrLn . showf <$> ev
 
 
-------------------------------------------------------------------------------
--- | A collection of constraints that represent a reflex-sdl2 network.
-type ReflexSDL2 t m =
-  ( Reflex t
-  , MonadHold t m
-  , PerformEvent t m
-  , MonadFix m
-  , MonadIO m
-  , MonadIO (Performable m)
-  , MonadReader (SystemEvents t) m
-  )
+holdView :: ReflexSDL2 t m => m a -> Event t (m a) -> m (Dynamic t a)
+holdView child0 newChild = do
+  (result0, newResult) <- runWithReplace child0 newChild
+  holdDyn result0 newResult
+
+
+dynView :: ReflexSDL2 t m => Dynamic t (m a) -> m (Event t a)
+dynView child = do
+  evPB <- getPostBuild
+  let newChild = leftmost [updated child, tagCheap (current child) evPB]
+  snd <$> runWithReplace (return ()) newChild
