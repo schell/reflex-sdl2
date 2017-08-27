@@ -16,7 +16,7 @@ import           SDL       hiding (Event)
 -- An event for reflex's post network build event.
 --
 -- An event for each frame tick.
-data SystemEvents t = SystemEvents
+data SystemEvents t a = SystemEvents
   { sysPostBuildEvent                 :: Event t ()
   -- ^ Fired just after the FRP network is built.
   , sysTicksEvent                     :: Event t Word32
@@ -63,4 +63,6 @@ data SystemEvents t = SystemEvents
   , sysDropEvent                      :: Event t DropEventData
   , sysClipboardUpdateEvent           :: Event t ()
   , sysUnknownEvent                   :: Event t UnknownEventData
+  , sysUserData                       :: a
+  -- ^ A slot to hold any custom user data.
   }

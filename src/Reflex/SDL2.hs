@@ -15,11 +15,12 @@
 -- For an example see
 -- [app/Main.hs](https://github.com/reflex-frp/reflex-sdl2/blob/master/app/Main.hs)
 module Reflex.SDL2
-  ( -- * Convenience constraints
+  ( -- * Constraints and the reflex-sdl2 base type
     ReflexSDL2
+  , ReflexSDL2T
     -- * Running an app
   , host
-    -- * All SDL events, packaged into reflex events
+    -- * System events and user data
   , SystemEvents(..)
     -- * Higher order switching
   , holdView
@@ -52,14 +53,12 @@ import           Reflex                  hiding (Additive)
 import           Reflex.Host.Class
 import           SDL                     hiding (Event)
 
-import           Reflex.SDL2.Internal    as RSDL2 hiding (sysPostBuildEvent)
-import           Reflex.SDL2.Internal    (sysPostBuildEvent)
-import           Reflex.Spider.Internal  (HasSpiderTimeline)
+import           Reflex.SDL2.Internal
 
 
 ------------------------------------------------------------------------------
 -- | A collection of constraints that represent the default reflex-sdl2 network.
-type ReflexSDL2 t m =
+type ReflexSDL2 t m r =
   ( Reflex t
   , MonadHold t m
   , MonadSample t m
@@ -69,27 +68,27 @@ type ReflexSDL2 t m =
   , MonadFix m
   , MonadIO m
   , MonadIO (Performable m)
-  , MonadReader (SystemEvents t) m
+  , MonadReader (SystemEvents t r) m
   )
 
 
 ------------------------------------------------------------------------------
--- | Provides a basic implementation of 'ReflexSDL2 t m' constraints.
-newtype ReflexSDL2T t (m :: * -> *) a =
-  ReflexSDL2T { runReflexSDL2T :: ReaderT (SystemEvents t) (PerformEventT t m) a }
+-- | Provides a basic implementation of 'ReflexSDL2' constraints.
+newtype ReflexSDL2T t (m :: * -> *) r a =
+  ReflexSDL2T { runReflexSDL2T :: ReaderT (SystemEvents t r) (PerformEventT t m) a }
 
-deriving instance ReflexHost t => Functor (ReflexSDL2T t m)
-deriving instance ReflexHost t => Applicative (ReflexSDL2T t m)
-deriving instance ReflexHost t => Monad (ReflexSDL2T t m)
-deriving instance ReflexHost t => MonadFix (ReflexSDL2T t m)
-deriving instance ReflexHost t => MonadReader (SystemEvents t) (ReflexSDL2T t m)
-deriving instance (ReflexHost t, MonadIO (HostFrame t)) => MonadIO (ReflexSDL2T t m)
-deriving instance (ReflexHost t, MonadException (HostFrame t)) => MonadException (ReflexSDL2T t m)
+deriving instance ReflexHost t => Functor (ReflexSDL2T t m r)
+deriving instance ReflexHost t => Applicative (ReflexSDL2T t m r)
+deriving instance ReflexHost t => Monad (ReflexSDL2T t m r)
+deriving instance ReflexHost t => MonadFix (ReflexSDL2T t m r)
+deriving instance ReflexHost t => MonadReader (SystemEvents t r) (ReflexSDL2T t m r)
+deriving instance (ReflexHost t, MonadIO (HostFrame t)) => MonadIO (ReflexSDL2T t m r)
+deriving instance (ReflexHost t, MonadException (HostFrame t)) => MonadException (ReflexSDL2T t m r)
 
 
 ------------------------------------------------------------------------------
 -- | 'ReflexSDL2T' is an instance of 'PostBuild'.
-instance (Reflex t, ReflexHost t, Monad m) => PostBuild t (ReflexSDL2T t m) where
+instance (Reflex t, ReflexHost t, Monad m) => PostBuild t (ReflexSDL2T t m r) where
   getPostBuild = asks sysPostBuildEvent
 
 
@@ -98,8 +97,8 @@ instance (Reflex t, ReflexHost t, Monad m) => PostBuild t (ReflexSDL2T t m) wher
 instance ( ReflexHost t
          , Ref m ~ Ref IO
          , PrimMonad (HostFrame t)
-         ) => PerformEvent t (ReflexSDL2T t m) where
-  type Performable (ReflexSDL2T t m) = HostFrame t
+         ) => PerformEvent t (ReflexSDL2T t m r) where
+  type Performable (ReflexSDL2T t m r) = HostFrame t
   performEvent_ = ReflexSDL2T . lift . performEvent_
   performEvent  = ReflexSDL2T . lift . performEvent
 
@@ -109,7 +108,7 @@ instance ( ReflexHost t
 instance ( Reflex t
          , ReflexHost t
          , PrimMonad (HostFrame t)
-         ) => MonadAdjust t (ReflexSDL2T t m) where
+         ) => MonadAdjust t (ReflexSDL2T t m r) where
   runWithReplace ma evmb =
     ReflexSDL2T $ runWithReplace (runReflexSDL2T ma) (runReflexSDL2T <$> evmb)
   traverseDMapWithKeyWithAdjust kvma dMapKV = ReflexSDL2T .
@@ -120,13 +119,13 @@ instance ( Reflex t
 
 ------------------------------------------------------------------------------
 -- | 'ReflexSDL2T' is an instance of 'MonadHold'.
-instance ReflexHost t => MonadSample t (ReflexSDL2T t m) where
+instance ReflexHost t => MonadSample t (ReflexSDL2T t m r) where
   sample = ReflexSDL2T . sample
 
 
 ------------------------------------------------------------------------------
 -- | 'ReflexSDL2T' is an instance of 'MonadHold'.
-instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T t m) where
+instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T t m r) where
   hold a = ReflexSDL2T . lift . hold a
   holdDyn a = ReflexSDL2T . lift . holdDyn a
   holdIncremental p = ReflexSDL2T . lift . holdIncremental p
@@ -138,7 +137,7 @@ instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T t m) where
 -- since the last frame.
 -- Be aware that subscribing to this 'Event' (by using it in a monadic action)
 -- will result in your app running sdl2's event loop every frame.
-getDeltaTickEvent :: ReflexSDL2 t m => m (Event t Word32)
+getDeltaTickEvent :: ReflexSDL2 t m r => m (Event t Word32)
 getDeltaTickEvent = do
   let f (lastTick, _) thisTick = (thisTick, thisTick - lastTick)
   evTickAndDel <- accum f (0, 0) =<< asks sysTicksEvent
@@ -148,10 +147,13 @@ getDeltaTickEvent = do
 ------------------------------------------------------------------------------
 -- | Host a reflex-sdl2 app.
 host
-  :: ReflexSDL2T Spider (SpiderHost Global) a
+  :: r
+  -- ^ A user data value of type 'r'.
+  -- Use @asks 'sysUserData'@ to access this value within your app network.
+  -> ReflexSDL2T Spider (SpiderHost Global) r a
   -- ^ A concrete reflex-sdl2 network to run.
   -> IO ()
-host app = runSpiderHost $ do
+host sysUserData app = runSpiderHost $ do
   -- Get events and trigger refs for all things that can happen.
   (sysPostBuildEvent,                                 trPostBuildRef) <- newEventWithTriggerRef
   (sysAnySDLEvent,                                       trAnySDLRef) <- newEventWithTriggerRef
@@ -321,13 +323,22 @@ putDebugLnE
 putDebugLnE ev showf = performEvent_ $ liftIO . putStrLn . showf <$> ev
 
 
-holdView :: ReflexSDL2 t m => m a -> Event t (m a) -> m (Dynamic t a)
+------------------------------------------------------------------------------
+-- | Run a placeholder network until the given 'Event' fires, then replace it
+-- with the network of the 'Event's value. This process is repeated each time
+-- the 'Event' fires a new network. Returns a 'Dynamic' of the inner network
+-- that updates any time the 'Event' fires.
+holdView :: ReflexSDL2 t m r => m a -> Event t (m a) -> m (Dynamic t a)
 holdView child0 newChild = do
   (result0, newResult) <- runWithReplace child0 newChild
   holdDyn result0 newResult
 
 
-dynView :: ReflexSDL2 t m => Dynamic t (m a) -> m (Event t a)
+------------------------------------------------------------------------------
+-- | Run a 'Dynamic'ally changing network, replacing the current one with the
+-- new one every time the 'Dynamic' updates. Returns an 'Event' of the inner
+-- network's result value that fires every time the 'Dynamic' changes.
+dynView :: ReflexSDL2 t m r => Dynamic t (m a) -> m (Event t a)
 dynView child = do
   evPB <- getPostBuild
   let newChild = leftmost [updated child, tagCheap (current child) evPB]
