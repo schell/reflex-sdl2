@@ -42,20 +42,20 @@ renderAABB r color pos = do
 
 
 -------------------------------------------------------------------------------
--- | A type representing one "commitLayers" in our app.
+-- | A type representing one layer in our app.
 type Layer m = Performable m ()
 
 
 ----------------------------------------------------------------------
 -- | Commit a layer stack that changes over time.
-commitLayers :: (ReflexSDL2 t m r, MonadDynamicWriter t [Layer m] m)
+commitLayers :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
       => Dynamic t [Layer m] -> m ()
 commitLayers = tellDyn
 
 
 ----------------------------------------------------------------------
 -- | Commit one layer that changes over time.
-commitLayer :: (ReflexSDL2 t m r, MonadDynamicWriter t [Layer m] m)
+commitLayer :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
             => Dynamic t (Layer m) -> m ()
 commitLayer = tellDyn . fmap pure
 
@@ -79,7 +79,7 @@ buttonState isInside isDown
   | otherwise    = ButtonStateOver
 
 
-button :: (ReflexSDL2 t m r, MonadDynamicWriter t [Layer m] m)
+button :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
        => Renderer
        -> m (Event t ButtonState)
 button r = do
@@ -114,7 +114,7 @@ button r = do
 
 
 guest
-  :: (ReflexSDL2 t m r, MonadDynamicWriter t [Layer m] m)
+  :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
   => Renderer
   -> m ()
 guest r = do
@@ -203,9 +203,9 @@ main = do
   r <- createRenderer window (-1) defaultRenderer
   rendererDrawBlendMode r $= BlendAlphaBlend
   host () $ do
-    (_, dynCommitLayerss) <- runDynamicWriterT $ guest r
-    performEvent_ $ ffor (updated dynCommitLayerss) $ \commitLayerss -> do
+    (_, dynLayers) <- runDynamicWriterT $ guest r
+    performEvent_ $ ffor (updated dynLayers) $ \layers -> do
       rendererDrawColor r $= V4 0 0 0 255
       clear r
-      sequence_ commitLayerss
+      sequence_ layers
       present r
