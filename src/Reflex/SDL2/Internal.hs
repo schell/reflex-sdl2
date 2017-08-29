@@ -2,12 +2,11 @@
 -- that are not meant to be dealt with by the user of the library.
 -- None-the-less these details are exported here just in case you
 -- need them :)
-{-# LANGUAGE KindSignatures #-}
 module Reflex.SDL2.Internal where
 
-import           Data.Word                   (Word32)
-import           Reflex
-import           SDL                         hiding (Event)
+import           Data.Word (Word32)
+import           Reflex    (Event)
+import           SDL       hiding (Event)
 
 ------------------------------------------------------------------------------
 -- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:

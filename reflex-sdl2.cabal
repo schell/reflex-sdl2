@@ -16,9 +16,9 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Reflex.SDL2
-  other-modules:       Reflex.SDL2.Internal
-  build-depends:       base                   >= 4.7   && < 5
-                     , containers             >= 0.5   && < 0.6
+                     , Reflex.SDL2.Internal
+  build-depends:       async                  >= 2.1   && < 2.2
+                     , base                   >= 4.7   && < 5
                      , dependent-sum          >= 0.4   && < 0.5
                      , exception-transformers >= 0.4   && < 0.5
                      , mtl                    >= 2.2   && < 2.3

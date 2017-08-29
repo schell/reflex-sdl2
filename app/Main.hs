@@ -7,8 +7,6 @@
 module Main where
 
 import           Control.Monad            (forM_, guard, void)
-import           Data.IORef
-import           Data.Word                (Word8)
 import           Reflex.SDL2
 import           System.Exit              (exitSuccess)
 
@@ -83,7 +81,7 @@ button :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
        => Renderer
        -> m (Event t ButtonState)
 button r = do
-  evMotionData <- asks sysMouseMotionEvent
+  evMotionData <- getMouseMotionEvent
   let position = V2 100 100
       size     = V2 100 100
       V2 tlx tly = position
@@ -93,7 +91,7 @@ button r = do
         (x >= tlx && x <= brx) && (y >= tly && y <= bry)
   dMouseIsInside <- holdDyn False evMouseIsInside
 
-  evBtn <- asks sysMouseButtonEvent
+  evBtn <- getMouseButtonEvent
   let evBtnIsDown = ffor evBtn $ (== Pressed) . mouseButtonEventMotion
   dButtonIsDown <- holdDyn False evBtnIsDown
 
@@ -135,7 +133,7 @@ guest r = do
   ------------------------------------------------------------------------------
   -- Gather all mouse motion events into a list, then commit a commitLayers that
   -- renders each move as a quarter alpha'd yello or cyan square.
-  evMouseMove <- asks sysMouseMotionEvent
+  evMouseMove <- getMouseMotionEvent
   dMoves      <- foldDyn (\x xs -> take 100 $ x : xs) [] evMouseMove
   commitLayer $ ffor dMoves $ \moves ->
     forM_ (reverse moves) $ \dat -> do
@@ -150,7 +148,7 @@ guest r = do
   ------------------------------------------------------------------------------
   -- Get any mouse button event and accumulate them as a list of
   -- AABBs. Commit a commitLayers of those rendered up/down AABBs.
-  evMouseButton <- asks sysMouseButtonEvent
+  evMouseButton <- getMouseButtonEvent
   dBtns         <- foldDyn (\x xs -> take 100 $ x : xs) [] evMouseButton
   commitLayer $ ffor dBtns $ \btns ->
     forM_ (reverse btns) $ \dat -> do
@@ -164,7 +162,7 @@ guest r = do
   -- This is an example of the higher-order nature of the reflex network. We
   -- can update the shape of the network in response to events within it.
   ------------------------------------------------------------------------------
-  evKey <- asks sysKeyboardEvent
+  evKey <- getKeyboardEvent
   let evKeyNoRepeat = fmapMaybe (\k -> k <$ guard (not $ keyboardEventRepeat k)) evKey
   dPressed <- holdDyn False $ ((== Pressed) . keyboardEventKeyMotion) <$> evKeyNoRepeat
   void $ holdView (return ()) $ ffor (updated dPressed) $ \case
@@ -196,10 +194,11 @@ guest r = do
   ------------------------------------------------------------------------------
   -- Quit on a quit event
   ------------------------------------------------------------------------------
-  evQuit <- asks sysQuitEvent
+  evQuit <- getQuitEvent
   performEvent_ $ ffor evQuit $ \() -> liftIO $ do
     putStrLn "bye!"
     exitSuccess
+
 
 main :: IO ()
 main = do
