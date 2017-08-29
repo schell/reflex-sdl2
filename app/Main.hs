@@ -182,6 +182,20 @@ guest r = do
             color = fromIntegral <$> V4 rc gc bc 255
         renderAABB r color 100
 
+  ------------------------------------------------------------------------------
+  -- Test our recurring timer events
+  ------------------------------------------------------------------------------
+  evEverySecond <- getRecurringTimerEvent 1000
+  dSeconds      <- foldDyn (+) 0 $ 1 <$ evEverySecond
+  putDebugLnE (updated dSeconds) $ ("1: " ++) . show
+
+  evEveryTwoSeconds <- getRecurringTimerEvent 2000
+  dTwoSeconds       <- foldDyn (+) 0 $ 1 <$ evEveryTwoSeconds
+  putDebugLnE (updated dTwoSeconds) $ ("2: " ++) . show
+
+  ------------------------------------------------------------------------------
+  -- Quit on a quit event
+  ------------------------------------------------------------------------------
   evQuit <- asks sysQuitEvent
   performEvent_ $ ffor evQuit $ \() -> liftIO $ do
     putStrLn "bye!"

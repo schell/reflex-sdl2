@@ -2,11 +2,12 @@
 -- that are not meant to be dealt with by the user of the library.
 -- None-the-less these details are exported here just in case you
 -- need them :)
+{-# LANGUAGE KindSignatures #-}
 module Reflex.SDL2.Internal where
 
-import           Data.Word (Word32)
+import           Data.Word                   (Word32)
 import           Reflex
-import           SDL       hiding (Event)
+import           SDL                         hiding (Event)
 
 ------------------------------------------------------------------------------
 -- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:
@@ -16,7 +17,7 @@ import           SDL       hiding (Event)
 -- An event for reflex's post network build event.
 --
 -- An event for each frame tick.
-data SystemEvents t a = SystemEvents
+data SystemEvents r t = SystemEvents
   { sysPostBuildEvent                 :: Event t ()
   -- ^ Fired just after the FRP network is built.
   , sysTicksEvent                     :: Event t Word32
@@ -63,6 +64,6 @@ data SystemEvents t a = SystemEvents
   , sysDropEvent                      :: Event t DropEventData
   , sysClipboardUpdateEvent           :: Event t ()
   , sysUnknownEvent                   :: Event t UnknownEventData
-  , sysUserData                       :: a
+  , sysUserData                       :: r
   -- ^ A slot to hold any custom user data.
   }
