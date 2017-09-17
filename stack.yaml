@@ -15,7 +15,7 @@
 # resolver:
 #  name: custom-snapshot
 #  location: "./custom-snapshot.yaml"
-resolver: lts-9.0
+resolver: lts-9.4
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -46,6 +46,7 @@ packages:
 extra-deps:
 - prim-uniq-0.1.0.1
 - ref-tf-0.4.0.1
+- sdl2-2.3.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}
