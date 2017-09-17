@@ -20,6 +20,7 @@ module Reflex.SDL2
     getDeltaTickEvent
   , getRecurringTimerEvent
   , getAsyncEvent
+  , delayEvent
   , getTicksEvent
   , getAnySDLEvent
   , getWindowShownEvent
@@ -62,6 +63,8 @@ module Reflex.SDL2
   , getClipboardUpdateEvent
   , getUnknownEvent
   , getUserData
+    -- * User data
+  , userLocal
     -- * Debugging
   , putDebugLnE
     -- * Constraints and the reflex-sdl2 base type
@@ -116,6 +119,11 @@ type ReflexSDL2 r t m =
   , MonadReflexCreateTrigger t m
   , TriggerEvent t m
   )
+
+
+userLocal :: ReflexSDL2 r t m => (r -> r) -> m a -> m a
+userLocal f = local (\se -> se{sysUserData = f $ sysUserData se})
+
 
 
 ------------------------------------------------------------------------------
@@ -242,6 +250,16 @@ getAsyncEvent action = do
     aa <- async action
     a  <- wait aa
     cb a
+
+
+--------------------------------------------------------------------------------
+-- | Delays the given event by the given number of milliseconds.
+delayEvent :: ReflexSDL2 r t m => Int -> Event t a -> m (Event t a)
+delayEvent millis ev = do
+  evEv <- getAsyncEvent $ do
+    threadDelay $ millis * 1000
+    return ev
+  switchPromptly never evEv
 
 
 getTicksEvent :: ReflexSDL2 r t m => m (Event t Word32)
