@@ -19,6 +19,7 @@ library
                      , Reflex.SDL2.Internal
   build-depends:       async                  >= 2.1   && < 2.2
                      , base                   >= 4.7   && < 5
+                     , containers             >= 0.5   && < 0.6
                      , dependent-sum          >= 0.4   && < 0.5
                      , exception-transformers >= 0.4   && < 0.5
                      , mtl                    >= 2.2   && < 2.3
