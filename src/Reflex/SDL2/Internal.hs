@@ -13,9 +13,10 @@ import           Reflex.Host.Class           (EventTrigger)
 import           SDL                         hiding (Event)
 
 
-data TimerEventData t m = TimerEventData { timerEventDataElapsed :: Int
-                                         , timerEventDataRef     :: Ref m (Maybe (EventTrigger t ()))
-                                         }
+data TimerEventData t m =
+  TimerEventData { timerEventDataElapsed :: Int
+                 , timerEventDataRef     :: Ref m (Maybe (EventTrigger t ()))
+                 }
 
 ------------------------------------------------------------------------------
 -- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:

@@ -19,7 +19,7 @@
 module Reflex.SDL2
   ( -- * Events
     getDeltaTickEvent
-  , getRecurringTimerEvent
+  , getRecurringTimerEventWithEventCode
   , performEventDelta
   , getAsyncEvent
   , delayEvent
@@ -100,12 +100,15 @@ import           Control.Monad.Reader
 import           Control.Monad.Ref           (MonadRef, Ref, readRef)
 import           Data.Dependent.Sum          (DSum ((:=>)))
 import           Data.Function               (fix)
+import           Data.Int                    (Int32)
 import           Data.IntMap                 (IntMap)
 import qualified Data.IntMap                 as IM
 import           Data.List                   (sort)
-import           Data.Maybe                  (fromMaybe, listToMaybe, catMaybes,
+import           Data.Maybe                  (catMaybes, fromMaybe, listToMaybe,
                                               maybeToList)
 import           Data.Word                   (Word32)
+import           Foreign.Ptr                 (Ptr)
+import           Foreign.Storable            (Storable (..))
 import           Reflex                      hiding (Additive)
 import           Reflex.Host.Class
 import           SDL                         hiding (Event)
@@ -222,6 +225,46 @@ instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T r t m) where
 
 
 --------------------------------------------------------------------------------
+data TimerData = TimerData { timerDataCode      :: Int32
+                           , timerDataTimestamp :: Timestamp
+                           }
+
+
+toTimerData :: Int32 -> RegisteredEventData -> Timestamp -> IO (Maybe TimerData)
+toTimerData eventCode rdat ts
+  | eventCode == registeredEventCode rdat =
+    return $ Just $ TimerData eventCode ts
+  | otherwise = return Nothing
+
+
+fromTimerData :: TimerData -> IO RegisteredEventData
+fromTimerData (TimerData code _) =
+  return $ emptyRegisteredEvent{ registeredEventCode = code }
+
+
+getRecurringTimerEventWithEventCode
+  :: ReflexSDL2 r t m => Int32 -> Int -> m (Event t ())
+getRecurringTimerEventWithEventCode eventCode millis = do
+  -- Register the timer event as a user event so it will wake `waitEvent` when
+  -- pushed into the queue.
+  let toData = toTimerData eventCode
+  mayReg <- registerEvent toData fromTimerData
+  case mayReg of
+    Nothing -> return ()
+    Just (RegisteredEventType push _) -> liftIO $ void $ async $ fix $ \loop -> do
+      threadDelay $ millis * 1000
+      ts <- ticks
+      push (TimerData eventCode ts) >>= \case
+        EventPushSuccess   -> return ()
+        EventPushFiltered  -> putStrLn "push filtered"
+        EventPushFailure t -> print t
+      loop
+  -- Filter the user event to only fire when the incoming code matches.
+  evUser <- getUserEvent
+  return $ fmapMaybe (guard . (eventCode ==) . userEventCode) evUser
+
+
+--------------------------------------------------------------------------------
 -- | Returns an event that fires each frame with the number of milliseconds
 -- since the last frame.
 -- Be aware that subscribing to this 'Event' (by using it in a monadic action)
@@ -234,33 +277,33 @@ getDeltaTickEvent = do
 
 
 --------------------------------------------------------------------------------
--- | Returns an 'Event' that fires every @n@ number of milliseconds. This is
--- useful for animation timers, etc. These events are fired on the main thread
--- and are safe to perform GL calls inside of.
-getRecurringTimerEvent
-  :: ReflexSDL2 r t m
-  => Int
-  -- ^ @n@ - the 'Event's recurring interval in milliseconds.
-  -> m (Event t ())
-getRecurringTimerEvent n = do
-  tvInt2MayEvent <- asks sysTimerEventsVar
-  int2MayEvent   <- liftIO $ readTVarIO tvInt2MayEvent
-  case IM.lookup n int2MayEvent of
-    -- The event request already exists and has been fulfilled, simply return it.
-    Just (Just ev) -> return ev
-    -- The event request already exists and is waiting to be fulfilled. Switch.
-    Just Nothing -> switchToEventWhenReady tvInt2MayEvent
-    -- The event has never been requested, so write a request into the tvar.
-    Nothing -> do
-      liftIO $ atomically $ modifyTVar' tvInt2MayEvent $ IM.insert n Nothing
-      switchToEventWhenReady tvInt2MayEvent
-  where switchToEventWhenReady tvInt2MayEvent = do
-          -- Check every frame tick to see if the event has been created and
-          -- switch to it as soon as it has been.
-          evTicks <- getTicksEvent
-          evMayEv <- performEvent $ ffor evTicks $ const $ liftIO
-            (IM.lookup n <$> readTVarIO tvInt2MayEvent)
-          switchPromptly never $ fmapMaybe join evMayEv
+---- | Returns an 'Event' that fires every @n@ number of milliseconds. This is
+---- useful for animation timers, etc. These events are fired on the main thread
+---- and are safe to perform GL calls inside of.
+--getRecurringTimerEvent
+--  :: ReflexSDL2 r t m
+--  => Int
+--  -- ^ @n@ - the 'Event's recurring interval in milliseconds.
+--  -> m (Event t ())
+--getRecurringTimerEvent n = do
+--  tvInt2MayEvent <- asks sysTimerEventsVar
+--  int2MayEvent   <- liftIO $ readTVarIO tvInt2MayEvent
+--  case IM.lookup n int2MayEvent of
+--    -- The event request already exists and has been fulfilled, simply return it.
+--    Just (Just ev) -> return ev
+--    -- The event request already exists and is waiting to be fulfilled. Switch.
+--    Just Nothing -> switchToEventWhenReady tvInt2MayEvent
+--    -- The event has never been requested, so write a request into the tvar.
+--    Nothing -> do
+--      liftIO $ atomically $ modifyTVar' tvInt2MayEvent $ IM.insert n Nothing
+--      switchToEventWhenReady tvInt2MayEvent
+--  where switchToEventWhenReady tvInt2MayEvent = do
+--          -- Check every frame tick to see if the event has been created and
+--          -- switch to it as soon as it has been.
+--          evTicks <- getTicksEvent
+--          evMayEv <- performEvent $ ffor evTicks $ const $ liftIO
+--            (IM.lookup n <$> readTVarIO tvInt2MayEvent)
+--          switchPromptly never $ fmapMaybe join evMayEv
 
 
 -- | Populate the event value with the time in milliseconds since the last time

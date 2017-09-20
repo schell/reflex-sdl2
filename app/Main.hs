@@ -1,15 +1,15 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE TypeFamilies            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE UndecidableInstances  #-}
 module Main where
 
-import           Control.Monad            (forM_, guard, void)
+import           Control.Monad (forM_, guard, void)
 import           Reflex.SDL2
-import           System.Exit              (exitSuccess)
+import           System.Exit   (exitSuccess)
 
 
 --------------------------------------------------------------------------------
@@ -184,14 +184,14 @@ guest r = do
   ------------------------------------------------------------------------------
   -- Test our recurring timer events
   ------------------------------------------------------------------------------
-  evEverySecond <- getRecurringTimerEvent 1000
-  dSeconds      <- foldDyn (+) 0 $ 1 <$ evEverySecond
-  putDebugLnE (updated dSeconds) $ ("1: " ++) . show
-
-  evEveryTwoSeconds <- getRecurringTimerEvent 2000
-  dTwoSeconds       <- foldDyn (+) 0 $ 1 <$ evEveryTwoSeconds
-  putDebugLnE (updated dTwoSeconds) $ ("2: " ++) . show
-
+  let performDeltaSecondTimer n = do
+        evEverySecond  <- getRecurringTimerEventWithEventCode n $ fromIntegral n * 1000
+        dSeconds       <- foldDyn (+) 0 $ 1 <$ evEverySecond
+        evSecondsDelta <- performEventDelta $ updated dSeconds
+        dSecondsDelta  <- holdDyn 0 evSecondsDelta
+        putDebugLnE (updated $ zipDynWith (,) dSeconds dSecondsDelta) $ (show n ++) . (": " ++) . show
+  performDeltaSecondTimer 1
+  performDeltaSecondTimer 2
   ------------------------------------------------------------------------------
   -- Quit on a quit event
   ------------------------------------------------------------------------------
