@@ -434,9 +434,9 @@ host
   :: r
   -- ^ A user data value of type 'r'.
   -- Use @asks 'sysUserData'@ to access this value within your app network.
-  -> ConcreteReflexSDL2 r a
+  -> ConcreteReflexSDL2 r ()
   -- ^ A concrete reflex-sdl2 network to run.
-  -> IO ()
+  -> IO void
 host sysUserData app = runSpiderHost $ do
   -- Get events and trigger refs for all things that can happen.
   (sysPostBuildEvent,                                 trPostBuildRef) <- newEventWithTriggerRef
@@ -486,7 +486,7 @@ host sysUserData app = runSpiderHost $ do
 
   chan <- liftIO newChan
   -- Build the network and get our firing command to trigger the post build event.
-  (_, FireCommand fire) <-
+  ((), FireCommand fire) <-
     hostPerformEventT $ runTriggerEventT (runReaderT (runReflexSDL2T app) SystemEvents{..}) chan
 
   -- Trigger the post build event.
