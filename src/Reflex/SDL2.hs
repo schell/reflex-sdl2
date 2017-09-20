@@ -19,10 +19,10 @@
 module Reflex.SDL2
   ( -- * Events
     getDeltaTickEvent
-  , getRecurringTimerEventWithEventCode
   , performEventDelta
-  , getAsyncEvent
-  , delayEvent
+  , getRecurringTimerEventWithEventCode
+  , getAsyncEventWithEventCode
+  , delayEventWithEventCode
   , getTicksEvent
   , getAnySDLEvent
   , getWindowShownEvent
@@ -85,23 +85,25 @@ module Reflex.SDL2
   , liftIO
   ) where
 
-import           Control.Concurrent          (threadDelay)
-import           Control.Concurrent.Async    (async, wait)
-import           Control.Concurrent.Chan     (newChan, readChan)
-import           Control.Monad               (forM_, void)
-import           Control.Monad.Exception     (MonadException)
-import           Control.Monad.Fix           (MonadFix)
-import           Control.Monad.Identity      (Identity (..))
-import           Control.Monad.IO.Class      (MonadIO, liftIO)
+import           Control.Concurrent       (threadDelay)
+import           Control.Concurrent.Async (async)
+import           Control.Monad            (forM_, void)
+import           Control.Monad.Exception  (MonadException)
+import           Control.Monad.Fix        (MonadFix)
+import           Control.Monad.Identity   (Identity (..))
+import           Control.Monad.IO.Class   (MonadIO, liftIO)
 import           Control.Monad.Reader
-import           Control.Monad.Ref           (MonadRef, Ref, readRef)
-import           Data.Dependent.Sum          (DSum ((:=>)))
-import           Data.Function               (fix)
-import           Data.Int                    (Int32)
-import           Data.Word                   (Word32)
-import           Reflex                      hiding (Additive)
+import           Control.Monad.Ref        (MonadRef, Ref, readRef)
+import           Data.Dependent.Sum       (DSum ((:=>)))
+import           Data.Function            (fix)
+import           Data.Int                 (Int32)
+import           Data.Word                (Word32)
+import           Foreign.Marshal.Alloc    (malloc, free)
+import           Foreign.Ptr              (castPtr, Ptr)
+import           Foreign.Storable         (Storable (..))
+import           Reflex                   hiding (Additive)
 import           Reflex.Host.Class
-import           SDL                         hiding (Event)
+import           SDL                      hiding (Event)
 
 import           Reflex.SDL2.Internal
 
@@ -119,14 +121,11 @@ type ReflexSDL2 r t m =
   , MonadIO m
   , MonadIO (Performable m)
   , MonadReader (SystemEvents r t) m
-  , MonadReflexCreateTrigger t m
-  , TriggerEvent t m
   )
 
 
 userLocal :: ReflexSDL2 r t m => (r -> r) -> m a -> m a
 userLocal f = local (\se -> se{sysUserData = f $ sysUserData se})
-
 
 
 ------------------------------------------------------------------------------
@@ -236,15 +235,14 @@ getRecurringTimerEventWithEventCode eventCode millis = do
   -- Register the timer event as a user event so it will wake `waitEvent` when
   -- pushed into the queue.
   let toData = toTimerData eventCode
-  mayReg <- registerEvent toData fromTimerData
-  case mayReg of
+  registerEvent toData fromTimerData >>= \case
     Nothing -> return ()
     Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ fix $ \loop -> do
       threadDelay $ millis * 1000
       ts <- ticks
       pushIt (TimerData eventCode ts) >>= \case
         EventPushSuccess   -> return ()
-        EventPushFiltered  -> putStrLn "push filtered"
+        EventPushFiltered  -> putStrLn "timer push filtered"
         EventPushFailure t -> print t
       loop
   -- Filter the user event to only fire when the incoming code matches.
@@ -273,27 +271,59 @@ performEventDelta ev = do
   fmap fst <$> accum (\(_, prev) now -> (now - prev, now)) (0, tnow) evTicks
 
 
---------------------------------------------------------------------------------
--- | Runs an asynchronous 'IO' action and returns an 'Event' that fires with the
--- result. These are _not_ fired on the main thread and should not be used to
--- run GL calls.
-getAsyncEvent :: ReflexSDL2 r t m => IO a -> m (Event t a)
-getAsyncEvent action = do
-  evPB <- getPostBuild
-  performEventAsync $ ffor evPB $ \() cb -> void $ liftIO $ do
-    aa <- async action
-    a  <- wait aa
-    cb a
+readAndFreePtr :: Storable a => Ptr () -> IO a
+readAndFreePtr ptr = do
+  a <- peek $ castPtr ptr
+  free ptr
+  return a
+
+
+registerAndPushAsync :: (MonadIO m, Storable a) => Int32 -> IO a -> m ()
+registerAndPushAsync eventCode action = do
+  let toData rdat _
+        | eventCode == registeredEventCode rdat =
+          Just <$> readAndFreePtr (registeredEventData1 rdat)
+        | otherwise = return Nothing
+      fromData a = do
+        ptr <- malloc
+        poke ptr a
+        return $ emptyRegisteredEvent{ registeredEventCode  = eventCode
+                                     , registeredEventData1 = castPtr ptr
+                                     }
+  registerEvent toData fromData >>= \case
+    Nothing -> return ()
+    Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ do
+      a <- action
+      pushIt a >>= \case
+        EventPushSuccess -> return ()
+        EventPushFiltered -> putStrLn "async push filtered"
+        EventPushFailure t -> print t
+
+
+getStorableUserEventWithEventCode
+  :: (ReflexSDL2 r t m, Storable a) => Int32 -> m (Event t a)
+getStorableUserEventWithEventCode code = do
+  evUser <- getUserEvent
+  let evUserFilt = fmapMaybe (\udat -> udat <$ guard (code == userEventCode udat))
+                             evUser
+  performEvent $ liftIO . readAndFreePtr . userEventData1 <$> evUserFilt
+
+
+getAsyncEventWithEventCode
+  :: (ReflexSDL2 r t m, Storable a) => Int32 -> IO a -> m (Event t a)
+getAsyncEventWithEventCode eventCode action = do
+  registerAndPushAsync eventCode action
+  getStorableUserEventWithEventCode eventCode
 
 
 --------------------------------------------------------------------------------
 -- | Delays the given event by the given number of milliseconds.
-delayEvent :: ReflexSDL2 r t m => Int -> Event t a -> m (Event t a)
-delayEvent millis ev = do
-  evEv <- getAsyncEvent $ do
-    threadDelay $ millis * 1000
-    return ev
-  switchPromptly never evEv
+delayEventWithEventCode
+  :: (ReflexSDL2 r t m, Storable a) => Int32 -> Int -> Event t a -> m (Event t a)
+delayEventWithEventCode code millis ev = do
+  performEvent_ $ ffor ev $ \a ->
+    registerAndPushAsync code $ threadDelay (millis * 1000) >> return a
+  getStorableUserEventWithEventCode code
 
 
 getTicksEvent :: ReflexSDL2 r t m => m (Event t Word32)
@@ -426,15 +456,16 @@ getUserData = asks sysUserData
 --------------------------------------------------------------------------------
 -- | The concrete/specialized type used to run reflex-sdl2 apps.
 type ConcreteReflexSDL2 r =
-  ReflexSDL2T r Spider (TriggerEventT Spider (PerformEventT Spider (SpiderHost Global)))
+  ReflexSDL2T r Spider (PerformEventT Spider (SpiderHost Global))
 
 
 ------------------------------------------------------------------------------
--- | Host a reflex-sdl2 app.
+-- | Host a reflex-sdl2 app. This function is your sdl2 app's main loop and
+-- will not terminate.
 host
   :: r
   -- ^ A user data value of type 'r'.
-  -- Use @asks 'sysUserData'@ to access this value within your app network.
+  -- Use @getUserData@ to access this value within your app network.
   -> ConcreteReflexSDL2 r ()
   -- ^ A concrete reflex-sdl2 network to run.
   -> IO void
@@ -484,28 +515,13 @@ host sysUserData app = runSpiderHost $ do
   (sysClipboardUpdateEvent,                     trClipboardUpdateRef) <- newEventWithTriggerRef
   (sysUnknownEvent,                                     trUnknownRef) <- newEventWithTriggerRef
 
-  chan <- liftIO newChan
   -- Build the network and get our firing command to trigger the post build event.
   ((), FireCommand fire) <-
-    hostPerformEventT $ runTriggerEventT (runReaderT (runReflexSDL2T app) SystemEvents{..}) chan
+    hostPerformEventT $ runReaderT (runReflexSDL2T app) SystemEvents{..}
 
   -- Trigger the post build event.
   (readRef trPostBuildRef >>=) . mapM_ $ \tr ->
     fire [tr :=> Identity ()] $ return ()
-
-  void $ liftIO $ async $ runSpiderHost $ fix $ \loop -> do
-    -- Fire any events waiting in our chan that may have been
-    -- created by the network itself.
-    triggerInvocations <- liftIO $ readChan chan
-    forM_ triggerInvocations $
-      \(EventTriggerRef etr :=> TriggerInvocation a _) ->
-        (readRef etr >>=) . mapM_ $ \tr ->
-          fire [tr :=> Identity a] $ return ()
-    -- Run any callbacks that async events in the chan are
-    -- waiting for.
-    forM_ triggerInvocations $
-      \(_ :=> TriggerInvocation _ cb) -> liftIO cb
-    loop
 
   -- Loop forever doing all of our main loop stuff.
   fix $ \loop -> do

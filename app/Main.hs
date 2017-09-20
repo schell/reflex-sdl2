@@ -7,9 +7,10 @@
 {-# LANGUAGE UndecidableInstances  #-}
 module Main where
 
-import           Control.Monad (forM_, guard, void)
+import           Control.Concurrent (threadDelay)
+import           Control.Monad      (forM_, guard, void)
 import           Reflex.SDL2
-import           System.Exit   (exitSuccess)
+import           System.Exit        (exitSuccess)
 
 
 --------------------------------------------------------------------------------
@@ -123,6 +124,19 @@ guest r = do
   evPB <- getPostBuild
   performEvent_ $ ffor evPB $ \() ->
     liftIO $ putStrLn "starting up..."
+  ------------------------------------------------------------------------------
+  -- Test async events.
+  -- This will wait three seconds before coloring the background black.
+  ------------------------------------------------------------------------------
+  evDelay <- getAsyncEventWithEventCode 0xBEEF $ threadDelay 3000000
+  dDelay  <- holdDyn False $ True <$ evDelay
+  commitLayers $ ffor dDelay $ \case
+    False -> pure $ do
+      rendererDrawColor r $= V4 128 128 128 255
+      fillRect r Nothing
+    True  -> pure $ do
+      rendererDrawColor r $= V4 0 0 0 255
+      fillRect r Nothing
 
   ------------------------------------------------------------------------------
   -- A button!
@@ -194,6 +208,7 @@ guest r = do
         putDebugLnE (updated $ zipDynWith (,) dSeconds dSecondsDelta) $ (show n ++) . (": " ++) . show
   performDeltaSecondTimer 1
   performDeltaSecondTimer 2
+
   ------------------------------------------------------------------------------
   -- Quit on a quit event
   ------------------------------------------------------------------------------
