@@ -59,9 +59,11 @@ commitLayer :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
 commitLayer = tellDyn . fmap pure
 
 
+ffor2 :: Reflex t => Dynamic t a -> Dynamic t b -> (a -> b -> c) -> Dynamic t c
 ffor2 a b f = zipDynWith f a b
 
-
+ffor2up
+  :: Reflex t => Dynamic t a -> Dynamic t b1 -> ((a, b1) -> b) -> Dynamic t b
 ffor2up a b = ffor (zipDyn a b)
 
 
@@ -172,9 +174,9 @@ guest r = do
       evDeltaTick <- getDeltaTickEvent
       dTimePressed <- foldDyn (+) 0 evDeltaTick
       commitLayer $ ffor dTimePressed $ \t -> do
-        let wrap :: Integral b => Float -> b
+        let wrap :: Float -> Int
             wrap x = if x > 255 then wrap (x - 255) else floor x
-            rc    = wrap $ fromIntegral t/1000   * 255
+            rc    = wrap $ fromIntegral t/1000 * 255
             gc    = wrap $ fromIntegral t/2000 * 255
             bc    = wrap $ fromIntegral t/3000 * 255
             color :: V4 Int
@@ -186,7 +188,7 @@ guest r = do
   ------------------------------------------------------------------------------
   let performDeltaSecondTimer n = do
         evEverySecond  <- getRecurringTimerEventWithEventCode n $ fromIntegral n * 1000
-        dSeconds       <- foldDyn (+) 0 $ 1 <$ evEverySecond
+        dSeconds       <- foldDyn (+) (0 :: Int) $ 1 <$ evEverySecond
         evSecondsDelta <- performEventDelta $ updated dSeconds
         dSecondsDelta  <- holdDyn 0 evSecondsDelta
         putDebugLnE (updated $ zipDynWith (,) dSeconds dSecondsDelta) $ (show n ++) . (": " ++) . show

@@ -88,9 +88,6 @@ module Reflex.SDL2
 import           Control.Concurrent          (threadDelay)
 import           Control.Concurrent.Async    (async, wait)
 import           Control.Concurrent.Chan     (newChan, readChan)
-import           Control.Concurrent.STM      (atomically)
-import           Control.Concurrent.STM.TVar (TVar, modifyTVar', newTVar,
-                                              readTVarIO, writeTVar)
 import           Control.Monad               (forM_, void)
 import           Control.Monad.Exception     (MonadException)
 import           Control.Monad.Fix           (MonadFix)
@@ -101,14 +98,7 @@ import           Control.Monad.Ref           (MonadRef, Ref, readRef)
 import           Data.Dependent.Sum          (DSum ((:=>)))
 import           Data.Function               (fix)
 import           Data.Int                    (Int32)
-import           Data.IntMap                 (IntMap)
-import qualified Data.IntMap                 as IM
-import           Data.List                   (sort)
-import           Data.Maybe                  (catMaybes, fromMaybe, listToMaybe,
-                                              maybeToList)
 import           Data.Word                   (Word32)
-import           Foreign.Ptr                 (Ptr)
-import           Foreign.Storable            (Storable (..))
 import           Reflex                      hiding (Additive)
 import           Reflex.Host.Class
 import           SDL                         hiding (Event)
@@ -225,9 +215,7 @@ instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T r t m) where
 
 
 --------------------------------------------------------------------------------
-data TimerData = TimerData { timerDataCode      :: Int32
-                           , timerDataTimestamp :: Timestamp
-                           }
+data TimerData = TimerData Int32 Timestamp
 
 
 toTimerData :: Int32 -> RegisteredEventData -> Timestamp -> IO (Maybe TimerData)
@@ -251,10 +239,10 @@ getRecurringTimerEventWithEventCode eventCode millis = do
   mayReg <- registerEvent toData fromTimerData
   case mayReg of
     Nothing -> return ()
-    Just (RegisteredEventType push _) -> liftIO $ void $ async $ fix $ \loop -> do
+    Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ fix $ \loop -> do
       threadDelay $ millis * 1000
       ts <- ticks
-      push (TimerData eventCode ts) >>= \case
+      pushIt (TimerData eventCode ts) >>= \case
         EventPushSuccess   -> return ()
         EventPushFiltered  -> putStrLn "push filtered"
         EventPushFailure t -> print t
@@ -274,36 +262,6 @@ getDeltaTickEvent = do
   let f (lastTick, _) thisTick = (thisTick, thisTick - lastTick)
   evTickAndDel <- accum f (0, 0) =<< asks sysTicksEvent
   return $ snd <$> evTickAndDel
-
-
---------------------------------------------------------------------------------
----- | Returns an 'Event' that fires every @n@ number of milliseconds. This is
----- useful for animation timers, etc. These events are fired on the main thread
----- and are safe to perform GL calls inside of.
---getRecurringTimerEvent
---  :: ReflexSDL2 r t m
---  => Int
---  -- ^ @n@ - the 'Event's recurring interval in milliseconds.
---  -> m (Event t ())
---getRecurringTimerEvent n = do
---  tvInt2MayEvent <- asks sysTimerEventsVar
---  int2MayEvent   <- liftIO $ readTVarIO tvInt2MayEvent
---  case IM.lookup n int2MayEvent of
---    -- The event request already exists and has been fulfilled, simply return it.
---    Just (Just ev) -> return ev
---    -- The event request already exists and is waiting to be fulfilled. Switch.
---    Just Nothing -> switchToEventWhenReady tvInt2MayEvent
---    -- The event has never been requested, so write a request into the tvar.
---    Nothing -> do
---      liftIO $ atomically $ modifyTVar' tvInt2MayEvent $ IM.insert n Nothing
---      switchToEventWhenReady tvInt2MayEvent
---  where switchToEventWhenReady tvInt2MayEvent = do
---          -- Check every frame tick to see if the event has been created and
---          -- switch to it as soon as it has been.
---          evTicks <- getTicksEvent
---          evMayEv <- performEvent $ ffor evTicks $ const $ liftIO
---            (IM.lookup n <$> readTVarIO tvInt2MayEvent)
---          switchPromptly never $ fmapMaybe join evMayEv
 
 
 -- | Populate the event value with the time in milliseconds since the last time
@@ -519,13 +477,12 @@ host sysUserData app = runSpiderHost $ do
   (sysUserEvent,                                           trUserRef) <- newEventWithTriggerRef
   (sysSysWMEvent,                                         trSysWMRef) <- newEventWithTriggerRef
   (sysTouchFingerEvent,                             trTouchFingerRef) <- newEventWithTriggerRef
+  (sysTouchFingerMotionEvent,                 trTouchFingerMotionRef) <- newEventWithTriggerRef
   (sysMultiGestureEvent,                           trMultiGestureRef) <- newEventWithTriggerRef
   (sysDollarGestureEvent,                         trDollarGestureRef) <- newEventWithTriggerRef
   (sysDropEvent,                                           trDropRef) <- newEventWithTriggerRef
   (sysClipboardUpdateEvent,                     trClipboardUpdateRef) <- newEventWithTriggerRef
   (sysUnknownEvent,                                     trUnknownRef) <- newEventWithTriggerRef
-
-  sysTimerEventsVar <- liftIO $ atomically $ newTVar mempty
 
   chan <- liftIO newChan
   -- Build the network and get our firing command to trigger the post build event.
@@ -550,78 +507,23 @@ host sysUserData app = runSpiderHost $ do
       \(_ :=> TriggerInvocation _ cb) -> liftIO cb
     loop
 
-  tvLastTicks  <- liftIO . atomically . newTVar =<< ticks
-  tvInt2Timers :: TVar (IM.IntMap (TimerEventData Spider (SpiderHost Global)))
-    <- liftIO $ atomically $ newTVar IM.empty
-
   -- Loop forever doing all of our main loop stuff.
   fix $ \loop -> do
-    -- Read our timer events request var and create any timer events.
-    int2MayEvents   <- liftIO $ readTVarIO sysTimerEventsVar
-    forM_ (IM.toList int2MayEvents) $ \case
-      (k, Nothing) -> do
-        (ev, ref) <- newEventWithTriggerRef
-        let ted = TimerEventData 0 ref
-        liftIO $ atomically $ do
-          modifyTVar' tvInt2Timers      $ IM.insert k ted
-          modifyTVar' sysTimerEventsVar $ IM.insert k $ Just ev
-      _ -> return ()
-
-    -- Fire any timer events whose time has lapsed, rinse and repeat.
-    t     <- ticks
-    lastT <- liftIO $ readTVarIO tvLastTicks
-    liftIO $ atomically $ writeTVar tvLastTicks t
-    let dt = t - lastT
-    int2Timers <- liftIO $ readTVarIO tvInt2Timers
-    mayNexts <- forM (IM.toList int2Timers) $ \(k, TimerEventData elapsed ref) ->
-      (readRef ref >>=) . mapM $ \tr -> do
-        let totalElapsed = elapsed + fromIntegral dt
-        if  totalElapsed >= k
-        then do
-          newElapsed <- ($ totalElapsed) $ fix $ \loop leftover ->
-            if leftover >= k
-            then do
-              void $ fire [tr :=> Identity ()] $ return ()
-              loop $ leftover - k
-            else return leftover
-          let ted = TimerEventData newElapsed ref
-              nxt = k - newElapsed
-          liftIO $ atomically $ modifyTVar' tvInt2Timers $ IM.insert k ted
-          return nxt
-        else do
-          let nxt = elapsed + fromIntegral dt
-              ted = TimerEventData nxt ref
-          liftIO $ atomically $ modifyTVar' tvInt2Timers $ IM.insert k ted
-          return $ k - nxt
-    -- TODO: Figure out how to clean up old timers.
-    -- NOTE: It isn't enough to simply check if the ref has a listener, there's
-    -- some special case where it's Nothing but it still needs to remain for
-    -- later.
-
-    -- Take the list of times until the next timer event and use that as a
-    -- timeout for waiting for sdl events. If there are none, let's timeout after
-    -- 1/6th of a second (arbitrary).
-    let deftout = floor $ 1000 / 6
-        timeout = maybe deftout fromIntegral . listToMaybe
-                                             . sort
-                                             . catMaybes
-                                             $ mayNexts
-
     -- Fire any tick events, if anyone is listening.
     -- If someone _is_ listening, we need to fire an
     -- event every frame - otherwise we can wait around
     -- for an sdl event to update the network.
+    t <- ticks
     shouldWait <- readRef trTicksRef >>= \case
       Nothing -> return True
       Just tr -> do
         void $ fire [tr :=> Identity t] $ return ()
         return False
 
-    payloads <- map eventPayload <$>
-      if shouldWait
-      then (++) <$> (maybeToList <$> waitEventTimeout timeout)
-                <*> pollEvents
-      else pollEvents
+    payloads <- map eventPayload <$> if shouldWait
+                                     then (:) <$> waitEvent
+                                              <*> pollEvents
+                                     else pollEvents
 
     forM_ payloads $ \case
       WindowShownEvent dat -> (readRef trWindowShownRef >>=) . mapM_ $ \tr ->
@@ -691,6 +593,8 @@ host sysUserData app = runSpiderHost $ do
       SysWMEvent dat -> (readRef trSysWMRef >>=) . mapM_ $ \tr ->
         fire [tr :=> Identity dat] $ return ()
       TouchFingerEvent dat -> (readRef trTouchFingerRef >>=) . mapM_ $ \tr ->
+        fire [tr :=> Identity dat] $ return ()
+      TouchFingerMotionEvent dat -> (readRef trTouchFingerMotionRef >>=) . mapM_ $ \tr ->
         fire [tr :=> Identity dat] $ return ()
       MultiGestureEvent dat -> (readRef trMultiGestureRef >>=) . mapM_ $ \tr ->
         fire [tr :=> Identity dat] $ return ()

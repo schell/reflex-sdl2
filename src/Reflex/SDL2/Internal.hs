@@ -4,19 +4,9 @@
 -- need them :)
 module Reflex.SDL2.Internal where
 
-import           Control.Concurrent.STM.TVar (TVar)
-import           Control.Monad.Ref           (Ref)
-import           Data.IntMap                 (IntMap)
 import           Data.Word                   (Word32)
 import           Reflex                      (Event)
-import           Reflex.Host.Class           (EventTrigger)
 import           SDL                         hiding (Event)
-
-
-data TimerEventData t m =
-  TimerEventData { timerEventDataElapsed :: Int
-                 , timerEventDataRef     :: Ref m (Maybe (EventTrigger t ()))
-                 }
 
 ------------------------------------------------------------------------------
 -- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:
@@ -68,12 +58,12 @@ data SystemEvents r t = SystemEvents
   , sysUserEvent                      :: Event t UserEventData
   , sysSysWMEvent                     :: Event t SysWMEventData
   , sysTouchFingerEvent               :: Event t TouchFingerEventData
+  , sysTouchFingerMotionEvent         :: Event t TouchFingerMotionEventData
   , sysMultiGestureEvent              :: Event t MultiGestureEventData
   , sysDollarGestureEvent             :: Event t DollarGestureEventData
   , sysDropEvent                      :: Event t DropEventData
   , sysClipboardUpdateEvent           :: Event t ()
   , sysUnknownEvent                   :: Event t UnknownEventData
-  , sysTimerEventsVar                 :: TVar (IntMap (Maybe (Event t ())))
   , sysUserData                       :: r
   -- ^ A slot to hold any custom user data.
   }

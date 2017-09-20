@@ -15,6 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
+  ghc-options:         -Wall
   exposed-modules:     Reflex.SDL2
                      , Reflex.SDL2.Internal
   build-depends:       async                  >= 2.1   && < 2.2
@@ -33,7 +34,7 @@ library
 executable reflex-sdl2-exe
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , reflex-sdl2
   default-language:    Haskell2010
