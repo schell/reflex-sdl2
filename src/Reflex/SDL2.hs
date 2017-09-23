@@ -17,12 +17,15 @@
 -- For an example see
 -- [app/Main.hs](https://github.com/schell/reflex-sdl2/blob/master/app/Main.hs)
 module Reflex.SDL2
-  ( -- * Events
+  ( -- * Time delta events
     getDeltaTickEvent
   , performEventDelta
+    -- * *WithEventCode events
+    -- $witheventcode
   , getRecurringTimerEventWithEventCode
   , getAsyncEventWithEventCode
   , delayEventWithEventCode
+    -- * SDL2 events
   , getTicksEvent
   , getAnySDLEvent
   , getWindowShownEvent
@@ -229,16 +232,31 @@ fromTimerData (TimerData code _) =
   return $ emptyRegisteredEvent{ registeredEventCode = code }
 
 
+--------------------------------------------------------------------------------
+-- $witheventcode
+-- The *WithEventCode flavor of events use sdl2's user events system. The
+-- created by each function fire on the main thread and can be used to
+-- drive GL updates. Because it uses sdl2's user event machinery it requires
+-- a special single use event code to identify the event on the other side of
+-- sdl2's FFI. This is a great use case for a @Fresh@ effect in your app.
+--------------------------------------------------------------------------------
+
+-- | Retrieves an event that fires every 'n' milliseconds.
 getRecurringTimerEventWithEventCode
-  :: ReflexSDL2 r t m => Int32 -> Int -> m (Event t ())
-getRecurringTimerEventWithEventCode eventCode millis = do
+  :: ReflexSDL2 r t m
+  => Int32
+  -- ^ Single use event code.
+  -> Int
+  -- ^ Number of milliseconds.
+  -> m (Event t ())
+getRecurringTimerEventWithEventCode eventCode n = do
   -- Register the timer event as a user event so it will wake `waitEvent` when
   -- pushed into the queue.
   let toData = toTimerData eventCode
   registerEvent toData fromTimerData >>= \case
     Nothing -> return ()
     Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ fix $ \loop -> do
-      threadDelay $ millis * 1000
+      threadDelay $ n * 1000
       ts <- ticks
       pushIt (TimerData eventCode ts) >>= \case
         EventPushSuccess   -> return ()
@@ -309,6 +327,14 @@ getStorableUserEventWithEventCode code = do
   performEvent $ liftIO . readAndFreePtr . userEventData1 <$> evUserFilt
 
 
+--------------------------------------------------------------------------------
+-- | Executes the given IO action in a separate thread asynchronously and
+-- returns an 'Event' that fires on the main thread with the result value
+-- of that action. This uses sdl2's user events system, which requires that
+-- the action result have an instance of 'Storable'.
+--
+-- Your 'a' type gets marshalled to C FFI and back, hence the
+-- 'Storable' requirement.
 getAsyncEventWithEventCode
   :: (ReflexSDL2 r t m, Storable a) => Int32 -> IO a -> m (Event t a)
 getAsyncEventWithEventCode eventCode action = do
