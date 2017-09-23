@@ -1,12 +1,12 @@
 name:                reflex-sdl2
-version:             0.1.0.0
+version:             0.2.0.0
 synopsis:            SDL2 and reflex FRP
 description:         A minimal host for sdl2 based reflex apps.
 homepage:            https://github.com/schell/reflex-sdl2#readme
 license:             MIT
 license-file:        LICENSE
 author:              Schell Scivally
-maintainer:          efsubenovex@gmail.com
+maintainer:          schell@takt.com
 copyright:           Copyright: (c) 2017 Schell Scivally
 category:            Game
 build-type:          Simple
