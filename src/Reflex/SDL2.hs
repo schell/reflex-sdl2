@@ -11,13 +11,22 @@
 {-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}
--- | This module contains the bare minimum needed to get started writing
--- reflex apps using sdl2.
+-- | This module contains a minimum yet convenient API needed to get started
+-- writing reflex apps with sdl2.
 --
 -- For an example see
 -- [app/Main.hs](https://github.com/schell/reflex-sdl2/blob/master/app/Main.hs)
 module Reflex.SDL2
-  ( -- * Time delta events
+  (-- * Running an app
+    host
+    -- * The reflex-sdl2 base type and constraints
+  , ReflexSDL2
+  , ReflexSDL2T
+  , ConcreteReflexSDL2
+    -- * Higher order switching
+  , holdView
+  , dynView
+  , -- * Time delta events
     getDeltaTickEvent
   , performEventDelta
     -- * *WithEventCode events
@@ -25,6 +34,13 @@ module Reflex.SDL2
   , getRecurringTimerEventWithEventCode
   , getAsyncEventWithEventCode
   , delayEventWithEventCode
+
+    -- * User data
+  , userLocal
+
+    -- * Debugging
+  , putDebugLnE
+
     -- * SDL2 events
   , getTicksEvent
   , getAnySDLEvent
@@ -68,19 +84,7 @@ module Reflex.SDL2
   , getClipboardUpdateEvent
   , getUnknownEvent
   , getUserData
-    -- * User data
-  , userLocal
-    -- * Debugging
-  , putDebugLnE
-    -- * Constraints and the reflex-sdl2 base type
-  , ReflexSDL2
-  , ReflexSDL2T
-  , ConcreteReflexSDL2
-    -- * Higher order switching
-  , holdView
-  , dynView
-    -- * Running an app
-  , host
+
     -- * Re-exports
   , module Reflex
   , module SDL
@@ -96,7 +100,7 @@ import           Control.Monad.Fix        (MonadFix)
 import           Control.Monad.Identity   (Identity (..))
 import           Control.Monad.IO.Class   (MonadIO, liftIO)
 import           Control.Monad.Reader
-import           Control.Monad.Ref        (MonadRef, Ref, readRef)
+import           Control.Monad.Ref        (readRef)
 import           Data.Dependent.Sum       (DSum ((:=>)))
 import           Data.Function            (fix)
 import           Data.Int                 (Int32)
@@ -127,7 +131,10 @@ type ReflexSDL2 r t m =
   )
 
 
-userLocal :: ReflexSDL2 r t m => (r -> r) -> m a -> m a
+------------------------------------------------------------------------------
+-- | Run a @('Reader' 'SystemEvents' r t)@ computation with a modified
+-- 'sysUserData' @r@.
+userLocal :: MonadReader (SystemEvents r t) m => (r -> r) -> m a -> m a
 userLocal f = local (\se -> se{sysUserData = f $ sysUserData se})
 
 
@@ -148,8 +155,8 @@ deriving instance (ReflexHost t, MonadException m) => MonadException (ReflexSDL2
 
 ------------------------------------------------------------------------------
 -- | 'ReflexSDL2T' is an instance of 'PostBuild'.
-instance (Reflex t, ReflexHost t, Monad m) => PostBuild t (ReflexSDL2T r t m) where
-  getPostBuild = asks sysPostBuildEvent
+instance (Reflex t, PostBuild t m, ReflexHost t, Monad m) => PostBuild t (ReflexSDL2T r t m) where
+  getPostBuild = lift getPostBuild
 
 
 ------------------------------------------------------------------------------
@@ -159,27 +166,6 @@ instance (ReflexHost t, PerformEvent t m) => PerformEvent t (ReflexSDL2T r t m) 
   performEvent_ = ReflexSDL2T . performEvent_ . fmap runReflexSDL2T
   performEvent  = ReflexSDL2T . performEvent  . fmap runReflexSDL2T
 
-
-------------------------------------------------------------------------------
-instance ( ReflexHost t
-         , MonadReflexCreateTrigger t m
-         , Monad m
-         , Applicative m
-         ) => MonadReflexCreateTrigger t (ReflexSDL2T r t m) where
-  newEventWithTrigger = ReflexSDL2T . newEventWithTrigger
-  newFanEventWithTrigger f = ReflexSDL2T $ newFanEventWithTrigger f
-
-
-instance ( ReflexHost t
-         , TriggerEvent t m
-         , MonadReflexCreateTrigger t m
-         , Monad m
-         , MonadRef m
-         , Ref m ~ Ref IO
-         ) => TriggerEvent t (ReflexSDL2T r t m) where
-  newTriggerEvent = lift newTriggerEvent
-  newTriggerEventWithOnComplete = lift newTriggerEventWithOnComplete
-  newEventWithLazyTriggerWithOnComplete = lift . newEventWithLazyTriggerWithOnComplete
 
 ------------------------------------------------------------------------------
 -- | 'ReflexSDL2T' is an instance of 'MonadAdjust'.
@@ -234,11 +220,12 @@ fromTimerData (TimerData code _) =
 
 --------------------------------------------------------------------------------
 -- $witheventcode
--- The *WithEventCode flavor of events use sdl2's user events system. The
--- created by each function fire on the main thread and can be used to
--- drive GL updates. Because it uses sdl2's user event machinery it requires
--- a special single use event code to identify the event on the other side of
--- sdl2's FFI. This is a great use case for a @Fresh@ effect in your app.
+-- The *WithEventCode flavor of events use sdl2's user events system. Each
+-- function evaluates on the current thread, returning an 'Event' that will fire
+-- on the main thread and can be used to drive GL updates. It uses sdl2's
+-- user event machinery, requiring a special single use event code to identify
+-- the event on the other side of sdl2's FFI. This is a great use case for a
+-- @Fresh@ effect in your app.
 --------------------------------------------------------------------------------
 
 -- | Retrieves an event that fires every 'n' milliseconds.
@@ -351,7 +338,9 @@ delayEventWithEventCode code millis ev = do
     registerAndPushAsync code $ threadDelay (millis * 1000) >> return a
   getStorableUserEventWithEventCode code
 
-
+--------------------------------------------------------------------------------
+-- SDL2 Events
+--------------------------------------------------------------------------------
 getTicksEvent :: ReflexSDL2 r t m => m (Event t Word32)
 getTicksEvent = asks sysTicksEvent
 
@@ -482,16 +471,18 @@ getUserData = asks sysUserData
 --------------------------------------------------------------------------------
 -- | The concrete/specialized type used to run reflex-sdl2 apps.
 type ConcreteReflexSDL2 r =
-  ReflexSDL2T r Spider (PerformEventT Spider (SpiderHost Global))
+  ReflexSDL2T r Spider (PostBuildT Spider (PerformEventT Spider (SpiderHost Global)))
+
+--deriving instance MonadReader (SystemEvents r Spider) (ConcreteReflexSDL2 r)
 
 
 ------------------------------------------------------------------------------
--- | Host a reflex-sdl2 app. This function is your sdl2 app's main loop and
+-- | Host a reflex-sdl2 app. This function is your application's main loop and
 -- will not terminate.
 host
   :: r
   -- ^ A user data value of type 'r'.
-  -- Use @getUserData@ to access this value within your app network.
+  -- Use 'getUserData' to access this value within your app network.
   -> ConcreteReflexSDL2 r ()
   -- ^ A concrete reflex-sdl2 network to run.
   -> IO void
@@ -543,7 +534,9 @@ host sysUserData app = runSpiderHost $ do
 
   -- Build the network and get our firing command to trigger the post build event.
   ((), FireCommand fire) <-
-    hostPerformEventT $ runReaderT (runReflexSDL2T app) SystemEvents{..}
+    hostPerformEventT $
+      runPostBuildT (runReaderT (runReflexSDL2T app) SystemEvents{..})
+                    sysPostBuildEvent
 
   -- Trigger the post build event.
   (readRef trPostBuildRef >>=) . mapM_ $ \tr ->
@@ -672,8 +665,8 @@ putDebugLnE ev showf = performEvent_ $ liftIO . putStrLn . showf <$> ev
 ------------------------------------------------------------------------------
 -- | Run a placeholder network until the given 'Event' fires, then replace it
 -- with the network of the 'Event's value. This process is repeated each time
--- the 'Event' fires a new network. Returns a 'Dynamic' of the inner network
--- that updates any time the 'Event' fires.
+-- the 'Event' fires a new network. Returns a 'Dynamic' of the inner network's
+-- result that updates any time the 'Event' fires.
 holdView :: ReflexSDL2 r t m => m a -> Event t (m a) -> m (Dynamic t a)
 holdView child0 newChild = do
   (result0, newResult) <- runWithReplace child0 newChild
