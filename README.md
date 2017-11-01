@@ -42,7 +42,7 @@ After building you can view an example using the built-in 2d renderer in
 
 To run the example do:
 
-    stack exec reflex-sdl2-exe
+    stack --nix exec reflex-sdl2-exe
 
 
 [0]: http://hackage.haskell.org/package/sdl2 "sdl2 haskell bindings"
