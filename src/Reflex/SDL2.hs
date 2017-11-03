@@ -110,7 +110,7 @@ import           Foreign.Ptr              (castPtr, Ptr)
 import           Foreign.Storable         (Storable (..))
 import           Reflex                   hiding (Additive)
 import           Reflex.Host.Class
-import           SDL                      hiding (Event)
+import           SDL                      hiding (Event, delay)
 
 import           Reflex.SDL2.Internal
 
@@ -121,7 +121,7 @@ type ReflexSDL2 r t m =
   ( Reflex t
   , MonadHold t m
   , MonadSample t m
-  , MonadAdjust t m
+  , Adjustable t m
   , PostBuild t m
   , PerformEvent t m
   , MonadFix m
@@ -168,19 +168,21 @@ instance (ReflexHost t, PerformEvent t m) => PerformEvent t (ReflexSDL2T r t m) 
 
 
 ------------------------------------------------------------------------------
--- | 'ReflexSDL2T' is an instance of 'MonadAdjust'.
+-- | 'ReflexSDL2T' is an instance of 'Adjustable'.
 instance ( Reflex t
          , ReflexHost t
-         , MonadAdjust t m
+         , Adjustable t m
          , Monad m
          --, PrimMonad (HostFrame t)
-         ) => MonadAdjust t (ReflexSDL2T r t m) where
+         ) => Adjustable t (ReflexSDL2T r t m) where
   runWithReplace ma evmb =
     ReflexSDL2T $ runWithReplace (runReflexSDL2T ma) (runReflexSDL2T <$> evmb)
   traverseDMapWithKeyWithAdjust kvma dMapKV = ReflexSDL2T .
     traverseDMapWithKeyWithAdjust (\ka -> runReflexSDL2T . kvma ka) dMapKV
   traverseDMapWithKeyWithAdjustWithMove kvma dMapKV = ReflexSDL2T .
     traverseDMapWithKeyWithAdjustWithMove (\ka -> runReflexSDL2T . kvma ka) dMapKV
+  traverseIntMapWithKeyWithAdjust f im = ReflexSDL2T .
+    traverseIntMapWithKeyWithAdjust (\ka -> runReflexSDL2T . f ka) im
 
 
 ------------------------------------------------------------------------------
@@ -200,6 +202,7 @@ instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T r t m) where
   holdDyn a = lift . holdDyn a
   holdIncremental p = lift . holdIncremental p
   buildDynamic ma = lift . buildDynamic ma
+  headE = lift . headE
 
 
 --------------------------------------------------------------------------------
