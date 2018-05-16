@@ -550,15 +550,28 @@ host sysUserData app = runSpiderHost $ do
 
   -- Build the network and get our firing command to trigger the post build event,
   -- then loop forever in another thread, dequeueing triggers from our chan and
-  -- placing them into a TVar. This keeps tho main loop from blocking.
+  -- placing them into a TVar. Push a new user event into the SDL event queue that
+  -- will set off a read of the TVar and the firing of the triggers within the
+  -- main loop.
   chan        <- liftIO newChan
   triggersVar <- liftIO $ atomically $ newTVar []
-  liftIO $ void $ async $ fix $ \loop -> do
-    trigs <- readChan chan
-    atomically $ do
-      prevTrigs <- readTVar triggersVar
-      writeTVar triggersVar $ prevTrigs ++ trigs
-    loop
+  let reservedTriggerCode = 31337
+      isJustTriggerData dat _ =
+        return $ guard $ registeredEventCode dat == reservedTriggerCode
+      fromData () = return emptyRegisteredEvent{ registeredEventCode  = reservedTriggerCode }
+  registerEvent isJustTriggerData fromData >>= \case
+    Nothing -> error "Could not register an sdl event for TriggerEvent."
+    Just (RegisteredEventType pushTriggers _) ->
+      liftIO $ void $ async $ fix $ \loop -> do
+        trigs <- readChan chan
+        atomically $ do
+          prevTrigs <- readTVar triggersVar
+          writeTVar triggersVar $ prevTrigs ++ trigs
+        pushTriggers () >>= \case
+          EventPushSuccess   -> return ()
+          EventPushFiltered  -> putStrLn "trigger push filtered"
+          EventPushFailure t -> print t
+        loop
 
   ((), FireCommand fire) <-
     hostPerformEventT $ flip runPostBuildT sysPostBuildEvent
@@ -571,23 +584,22 @@ host sysUserData app = runSpiderHost $ do
 
   -- Loop forever doing all of our main loop stuff.
   fix $ \loop -> do
-    -- Fire any triggered events from our triggers var, draining any triggers in
-    -- it.
-    triggers <- liftIO $ atomically $ do
-      trigs <- readTVar triggersVar
-      writeTVar triggersVar []
-      return trigs
-    forM_ triggers $ \(EventTriggerRef ref :=> TriggerInvocation a _cb) ->
-      (readRef ref >>=) . mapM_ $ \tr -> fire [tr :=> Identity a] $ return ()
-    -- Run the callbacks of those triggered events.
-    forM_ triggers $ \(_ :=> TriggerInvocation _a cb) -> liftIO cb
+    -- Fire any tick events if anyone is listening.
+    -- If someone _is_ listening, we need to fire an
+    -- event every frame - otherwise we can wait around
+    -- for an sdl event to update the network.
+    shouldWait <- readRef trTicksRef >>= \case
+      Nothing -> return True
+      Just tr -> do
+        t <- ticks
+        void $ fire [tr :=> Identity t] $ return ()
+        return False
 
-    -- Fire our ticks events.
-    t <- ticks
-    (readRef trTicksRef >>=) . mapM_ $ \tr -> fire [tr :=> Identity t] $ return ()
+    payloads <- map eventPayload <$> if shouldWait
+                                     then (:) <$> waitEvent
+                                              <*> pollEvents
+                                     else pollEvents
 
-    -- Fire our sdl events.
-    payloads <- map eventPayload <$> pollEvents
     forM_ payloads $ \case
       WindowShownEvent dat -> (readRef trWindowShownRef >>=) . mapM_ $ \tr ->
         fire [tr :=> Identity dat] $ return ()
@@ -651,8 +663,19 @@ host sysUserData app = runSpiderHost $ do
         fire [tr :=> Identity dat] $ return ()
       QuitEvent -> (readRef trQuitRef >>=) . mapM_ $ \tr ->
         fire [tr :=> Identity ()] $ return ()
-      UserEvent dat -> (readRef trUserRef >>=) . mapM_ $ \tr ->
-        fire [tr :=> Identity dat] $ return ()
+      UserEvent dat ->
+        -- We've found some triggered reflex events, read them and fire them.
+        if userEventCode dat == reservedTriggerCode
+        then do
+          triggers <- liftIO $ atomically $ do
+            trigs <- readTVar triggersVar
+            writeTVar triggersVar []
+            return trigs
+          forM_ triggers $ \(EventTriggerRef ref :=> TriggerInvocation a _cb) ->
+            (readRef ref >>=) . mapM_ $ \tr -> fire [tr :=> Identity a] $ return ()
+          -- Run the callbacks of those triggered events.
+          forM_ triggers $ \(_ :=> TriggerInvocation _a cb) -> liftIO cb
+        else (readRef trUserRef >>=) . mapM_ $ \tr -> fire [tr :=> Identity dat] $ return ()
       SysWMEvent dat -> (readRef trSysWMRef >>=) . mapM_ $ \tr ->
         fire [tr :=> Identity dat] $ return ()
       TouchFingerEvent dat -> (readRef trTouchFingerRef >>=) . mapM_ $ \tr ->
