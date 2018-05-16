@@ -128,7 +128,7 @@ guest r = do
   -- Test async events.
   -- This will wait three seconds before coloring the background black.
   ------------------------------------------------------------------------------
-  evDelay <- getAsyncEventWithEventCode 0xBEEF $ threadDelay 3000000
+  evDelay <- getAsyncEvent $ threadDelay 3000000
   dDelay  <- holdDyn False $ True <$ evDelay
   commitLayers $ ffor dDelay $ \case
     False -> pure $ do

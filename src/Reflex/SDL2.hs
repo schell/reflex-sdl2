@@ -27,9 +27,14 @@ module Reflex.SDL2
     -- * Higher order switching
   , holdView
   , dynView
+
   , -- * Time delta events
     getDeltaTickEvent
   , performEventDelta
+
+    -- * Doing async events
+  , getAsyncEvent
+
     -- * *WithEventCode events
     -- $witheventcode
   , getRecurringTimerEventWithEventCode
@@ -346,6 +351,14 @@ getAsyncEventWithEventCode
 getAsyncEventWithEventCode eventCode action = do
   registerAndPushAsync eventCode action
   getStorableUserEventWithEventCode eventCode
+
+
+--------------------------------------------------------------------------------
+getAsyncEvent :: ReflexSDL2 r t m => IO a -> m (Event t a)
+getAsyncEvent f = do
+  (ev, g) <- newTriggerEvent
+  void $ liftIO $ async $ f >>= g
+  return ev
 
 
 --------------------------------------------------------------------------------
