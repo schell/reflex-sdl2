@@ -10,7 +10,6 @@ module Main where
 import           Control.Concurrent (threadDelay)
 import           Control.Monad      (forM_, guard, void)
 import           Reflex.SDL2
-import           System.Exit        (exitSuccess)
 
 
 --------------------------------------------------------------------------------
@@ -181,7 +180,7 @@ guest r = do
   ------------------------------------------------------------------------------
   evKey <- getKeyboardEvent
   let evKeyNoRepeat = fmapMaybe (\k -> k <$ guard (not $ keyboardEventRepeat k)) evKey
-  dPressed <- holdDyn False $ ((== Pressed) . keyboardEventKeyMotion) <$> evKeyNoRepeat
+  dPressed <- holdDyn False $ (== Pressed) . keyboardEventKeyMotion <$> evKeyNoRepeat
   void $ holdView (return ()) $ ffor (updated dPressed) $ \case
     False -> return ()
     True  -> do
@@ -201,21 +200,31 @@ guest r = do
   -- Test our recurring timer events
   ------------------------------------------------------------------------------
   let performDeltaSecondTimer n = do
-        evEverySecond  <- getRecurringTimerEventWithEventCode n $ fromIntegral n * 1000
-        dSeconds       <- foldDyn (+) (0 :: Int) $ 1 <$ evEverySecond
-        evSecondsDelta <- performEventDelta $ updated dSeconds
-        dSecondsDelta  <- holdDyn 0 evSecondsDelta
-        putDebugLnE (updated $ zipDynWith (,) dSeconds dSecondsDelta) $ (show n ++) . (": " ++) . show
+        evDelta  <- performEventDelta =<< tickLossyFromPostBuildTime n
+        dTicks   <- foldDyn (+) 0 $ (1 :: Int) <$ evDelta
+        dDelta   <- holdDyn 0 evDelta
+        dElapsed <- foldDyn (+) 0 evDelta
+        flip putDebugLnE id $ updated $ do
+          tickz <- dTicks
+          lapse <- dElapsed
+          delta <- dDelta
+          return $ unwords [ show n
+                           , "timer -"
+                           , show tickz
+                           , "ticks -"
+                           , show lapse
+                           , "lapsed -"
+                           , show delta
+                           , "delta since last tick"
+                           ]
   performDeltaSecondTimer 1
-  performDeltaSecondTimer 2
 
   ------------------------------------------------------------------------------
   -- Quit on a quit event
   ------------------------------------------------------------------------------
   evQuit <- getQuitEvent
-  performEvent_ $ ffor evQuit $ \() -> liftIO $ do
-    putStrLn "bye!"
-    exitSuccess
+  performEvent_ $ liftIO (putStrLn "bye!") <$ evQuit
+  shutdownOn =<< delay 0 evQuit
 
 
 main :: IO ()
@@ -240,3 +249,6 @@ main = do
       clear r
       sequence_ layers
       present r
+  destroyRenderer r
+  destroyWindow window
+  quit

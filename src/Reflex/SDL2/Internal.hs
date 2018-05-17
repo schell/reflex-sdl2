@@ -4,9 +4,11 @@
 -- need them :)
 module Reflex.SDL2.Internal where
 
-import           Data.Word                   (Word32)
-import           Reflex                      (Event)
-import           SDL                         hiding (Event)
+import           Control.Concurrent (MVar)
+import           Data.Word          (Word32)
+import           GHC.Conc           (TVar)
+import           Reflex             (Event)
+import           SDL                hiding (Event)
 
 ------------------------------------------------------------------------------
 -- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:
@@ -66,4 +68,6 @@ data SystemEvents r t = SystemEvents
   , sysUnknownEvent                   :: Event t UnknownEventData
   , sysUserData                       :: r
   -- ^ A slot to hold any custom user data.
+  , sysQuitVar                        :: MVar ()
+  -- ^ A var to sync quitting.
   }

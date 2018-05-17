@@ -6,10 +6,13 @@
 {-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE OverloadedStrings          #-}
+
+
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}
 -- | This module contains a minimum yet convenient API needed to get started
@@ -18,28 +21,29 @@
 -- For an example see
 -- [app/Main.hs](https://github.com/schell/reflex-sdl2/blob/master/app/Main.hs)
 module Reflex.SDL2
-  (-- * Running an app
+  ( -- * Running an app
     host
+
+    -- * Gracefully shutting down an app
+  , shutdownOn
+
     -- * The reflex-sdl2 base type and constraints
   , ReflexSDL2
   , ReflexSDL2T
   , ConcreteReflexSDL2
+
     -- * Higher order switching
   , holdView
   , dynView
 
-  , -- * Time delta events
-    getDeltaTickEvent
+    -- * Time and recurring timer events
+  , TickInfo(..)
+  , tickLossyFromPostBuildTime
+  , getDeltaTickEvent
   , performEventDelta
 
-    -- * Doing async events
+    -- * Async events
   , getAsyncEvent
-
-    -- * *WithEventCode events
-    -- $witheventcode
-  , getRecurringTimerEventWithEventCode
-  , getAsyncEventWithEventCode
-  , delayEventWithEventCode
 
     -- * User data
   , getUserData
@@ -99,9 +103,10 @@ module Reflex.SDL2
   , liftIO
   ) where
 
-import           Control.Concurrent       (newChan, readChan, threadDelay)
-import           Control.Concurrent.Async (async)
-import           Control.Monad            (forM_, void)
+import           Control.Concurrent       (newChan, newEmptyMVar, putMVar,
+                                           readChan, takeMVar)
+import           Control.Concurrent.Async (async, cancel)
+import           Control.Monad            (forM_, void, unless)
 import           Control.Monad.Exception  (MonadException)
 import           Control.Monad.Fix        (MonadFix)
 import           Control.Monad.Identity   (Identity (..))
@@ -110,15 +115,13 @@ import           Control.Monad.Reader
 import           Control.Monad.Ref        (readRef)
 import           Data.Dependent.Sum       (DSum ((:=>)))
 import           Data.Function            (fix)
-import           Data.Int                 (Int32)
+import           Data.Time.Clock          (NominalDiffTime, getCurrentTime)
 import           Data.Word                (Word32)
-import           Foreign.Marshal.Alloc    (free, malloc)
-import           Foreign.Ptr              (Ptr, castPtr)
-import           Foreign.Storable         (Storable (..))
 import           GHC.Conc                 (atomically, newTVar, readTVar,
-                                           writeTVar)
+                                           writeTVar, readTVarIO)
 import           Reflex                   hiding (Additive)
 import           Reflex.Host.Class
+import           Reflex.Time              (tickLossyFrom')
 import           SDL                      hiding (Event, delay)
 
 import           Reflex.SDL2.Internal
@@ -152,6 +155,12 @@ userLocal f = local (\se -> se{sysUserData = f $ sysUserData se})
 -- | Provides a basic implementation of 'ReflexSDL2' constraints.
 newtype ReflexSDL2T r t (m :: * -> *) a =
   ReflexSDL2T { unReflexSDL2T :: ReaderT (SystemEvents r t) m a }
+
+
+-- TODO: Rethink user data and SystemEvents.
+-- We shouldn't expect users to pack their reader data into `r` of `ReflexSDL2T r t m`.
+-- Instead we should hide the `SystemEvents` reader, write Class.hs and Base.hs
+-- modules - like `MonadSDL2` or something.
 
 
 runReflexSDL2T :: ReflexSDL2T r t m a -> SystemEvents r t -> m a
@@ -227,59 +236,6 @@ instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T r t m) where
 
 
 --------------------------------------------------------------------------------
-data TimerData = TimerData Int32 Timestamp
-
-
-toTimerData :: Int32 -> RegisteredEventData -> Timestamp -> IO (Maybe TimerData)
-toTimerData eventCode rdat ts
-  | eventCode == registeredEventCode rdat =
-    return $ Just $ TimerData eventCode ts
-  | otherwise = return Nothing
-
-
-fromTimerData :: TimerData -> IO RegisteredEventData
-fromTimerData (TimerData code _) =
-  return $ emptyRegisteredEvent{ registeredEventCode = code }
-
-
---------------------------------------------------------------------------------
--- $witheventcode
--- The *WithEventCode flavor of events use sdl2's user events system. Each
--- function evaluates on the current thread, returning an 'Event' that will fire
--- on the main thread and can be used to drive GL updates. It uses sdl2's
--- user event machinery, requiring a special single use event code to identify
--- the event on the other side of sdl2's FFI. This is a great use case for a
--- @Fresh@ effect in your app.
---------------------------------------------------------------------------------
-
--- | Retrieves an event that fires every 'n' milliseconds.
-getRecurringTimerEventWithEventCode
-  :: ReflexSDL2 r t m
-  => Int32
-  -- ^ Single use event code.
-  -> Int
-  -- ^ Number of milliseconds.
-  -> m (Event t ())
-getRecurringTimerEventWithEventCode eventCode n = do
-  -- Register the timer event as a user event so it will wake `waitEvent` when
-  -- pushed into the queue.
-  let toData = toTimerData eventCode
-  registerEvent toData fromTimerData >>= \case
-    Nothing -> return ()
-    Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ fix $ \loop -> do
-      threadDelay $ n * 1000
-      ts <- ticks
-      pushIt (TimerData eventCode ts) >>= \case
-        EventPushSuccess   -> return ()
-        EventPushFiltered  -> putStrLn "timer push filtered"
-        EventPushFailure t -> print t
-      loop
-  -- Filter the user event to only fire when the incoming code matches.
-  evUser <- getUserEvent
-  return $ fmapMaybe (guard . (eventCode ==) . userEventCode) evUser
-
-
---------------------------------------------------------------------------------
 -- | Returns an event that fires each frame with the number of milliseconds
 -- since the last frame.
 -- Be aware that subscribing to this 'Event' (by using it in a monadic action)
@@ -291,6 +247,26 @@ getDeltaTickEvent = do
   return $ snd <$> evTickAndDel
 
 
+-- | Special case of 'tickLossyFrom' that uses the post-build event to start the
+--   tick thread and the time of the post-build as the tick basis time.
+--
+-- TODO: Update reflex to the version that includes `tickLosyFromPostBuildTime`.
+-- Then we can remove this from here, since it's provided by reflex itself.
+tickLossyFromPostBuildTime
+  :: ( PostBuild t m
+     , PerformEvent t m
+     , TriggerEvent t m
+     , MonadIO (Performable m)
+     , MonadFix m
+     )
+  => NominalDiffTime
+  -> m (Event t TickInfo)
+tickLossyFromPostBuildTime dt = do
+  postBuild <- getPostBuild
+  postBuildTime <- performEvent $ liftIO getCurrentTime <$ postBuild
+  tickLossyFrom' $ (dt,) <$> postBuildTime
+
+
 -- | Populate the event value with the time in milliseconds since the last time
 -- the event fired.
 performEventDelta :: ReflexSDL2 r t m => Event t a -> m (Event t Word32)
@@ -300,57 +276,57 @@ performEventDelta ev = do
   fmap fst <$> accum (\(_, prev) now -> (now - prev, now)) (0, tnow) evTicks
 
 
-readAndFreePtr :: Storable a => Ptr () -> IO a
-readAndFreePtr ptr = do
-  a <- peek $ castPtr ptr
-  free ptr
-  return a
-
-
-registerAndPushAsync :: (MonadIO m, Storable a) => Int32 -> IO a -> m ()
-registerAndPushAsync eventCode action = do
-  let toData rdat _
-        | eventCode == registeredEventCode rdat =
-          Just <$> readAndFreePtr (registeredEventData1 rdat)
-        | otherwise = return Nothing
-      fromData a = do
-        ptr <- malloc
-        poke ptr a
-        return $ emptyRegisteredEvent{ registeredEventCode  = eventCode
-                                     , registeredEventData1 = castPtr ptr
-                                     }
-  registerEvent toData fromData >>= \case
-    Nothing -> return ()
-    Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ do
-      a <- action
-      pushIt a >>= \case
-        EventPushSuccess -> return ()
-        EventPushFiltered -> putStrLn "async push filtered"
-        EventPushFailure t -> print t
-
-
-getStorableUserEventWithEventCode
-  :: (ReflexSDL2 r t m, Storable a) => Int32 -> m (Event t a)
-getStorableUserEventWithEventCode code = do
-  evUser <- getUserEvent
-  let evUserFilt = fmapMaybe (\udat -> udat <$ guard (code == userEventCode udat))
-                             evUser
-  performEvent $ liftIO . readAndFreePtr . userEventData1 <$> evUserFilt
-
-
---------------------------------------------------------------------------------
--- | Executes the given IO action in a separate thread asynchronously and
--- returns an 'Event' that fires on the main thread with the result value
--- of that action. This uses sdl2's user events system, which requires that
--- the action result have an instance of 'Storable'.
+--readAndFreePtr :: Storable a => Ptr () -> IO a
+--readAndFreePtr ptr = do
+--  a <- peek $ castPtr ptr
+--  free ptr
+--  return a
 --
--- Your 'a' type gets marshalled to C FFI and back, hence the
--- 'Storable' requirement.
-getAsyncEventWithEventCode
-  :: (ReflexSDL2 r t m, Storable a) => Int32 -> IO a -> m (Event t a)
-getAsyncEventWithEventCode eventCode action = do
-  registerAndPushAsync eventCode action
-  getStorableUserEventWithEventCode eventCode
+--
+--registerAndPushAsync :: (MonadIO m, Storable a) => Int32 -> IO a -> m ()
+--registerAndPushAsync eventCode action = do
+--  let toData rdat _
+--        | eventCode == registeredEventCode rdat =
+--          Just <$> readAndFreePtr (registeredEventData1 rdat)
+--        | otherwise = return Nothing
+--      fromData a = do
+--        ptr <- malloc
+--        poke ptr a
+--        return $ emptyRegisteredEvent{ registeredEventCode  = eventCode
+--                                     , registeredEventData1 = castPtr ptr
+--                                     }
+--  registerEvent toData fromData >>= \case
+--    Nothing -> return ()
+--    Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ do
+--      a <- action
+--      pushIt a >>= \case
+--        EventPushSuccess -> return ()
+--        EventPushFiltered -> putStrLn "async push filtered"
+--        EventPushFailure t -> print t
+--
+--
+--getStorableUserEventWithEventCode
+--  :: (ReflexSDL2 r t m, Storable a) => Int32 -> m (Event t a)
+--getStorableUserEventWithEventCode code = do
+--  evUser <- getUserEvent
+--  let evUserFilt = fmapMaybe (\udat -> udat <$ guard (code == userEventCode udat))
+--                             evUser
+--  performEvent $ liftIO . readAndFreePtr . userEventData1 <$> evUserFilt
+--
+--
+----------------------------------------------------------------------------------
+---- | Executes the given IO action in a separate thread asynchronously and
+---- returns an 'Event' that fires on the main thread with the result value
+---- of that action. This uses sdl2's user events system, which requires that
+---- the action result have an instance of 'Storable'.
+----
+---- Your 'a' type gets marshalled to C FFI and back, hence the
+---- 'Storable' requirement.
+--getAsyncEventWithEventCode
+--  :: (ReflexSDL2 r t m, Storable a) => Int32 -> IO a -> m (Event t a)
+--getAsyncEventWithEventCode eventCode action = do
+--  registerAndPushAsync eventCode action
+--  getStorableUserEventWithEventCode eventCode
 
 
 --------------------------------------------------------------------------------
@@ -361,14 +337,14 @@ getAsyncEvent f = do
   return ev
 
 
---------------------------------------------------------------------------------
--- | Delays the given event by the given number of milliseconds.
-delayEventWithEventCode
-  :: (ReflexSDL2 r t m, Storable a) => Int32 -> Int -> Event t a -> m (Event t a)
-delayEventWithEventCode code millis ev = do
-  performEvent_ $ ffor ev $ \a ->
-    registerAndPushAsync code $ threadDelay (millis * 1000) >> return a
-  getStorableUserEventWithEventCode code
+----------------------------------------------------------------------------------
+---- | Delays the given event by the given number of milliseconds.
+--delayEventWithEventCode
+--  :: (ReflexSDL2 r t m, Storable a) => Int32 -> Int -> Event t a -> m (Event t a)
+--delayEventWithEventCode code millis ev = do
+--  performEvent_ $ ffor ev $ \a ->
+--    registerAndPushAsync code $ threadDelay (millis * 1000) >> return a
+--  getStorableUserEventWithEventCode code
 
 --------------------------------------------------------------------------------
 -- SDL2 Events
@@ -501,20 +477,29 @@ getUserData = asks sysUserData
 
 
 --------------------------------------------------------------------------------
+-- $grace
+-- | Will exit the main reflex-sdl2 loop when the given Event fires. This allows
+-- the programmer to shut down the network before shutting down SDL.
+shutdownOn :: ReflexSDL2 r t m => Event t () -> m ()
+shutdownOn ev = do
+  var <- asks sysQuitVar
+  performEvent_ $ liftIO (putMVar var ()) <$ ev
+
+
+--------------------------------------------------------------------------------
 -- | The pretty much monomorphic type used to run reflex-sdl2 apps.
 type ConcreteReflexSDL2 r = ReflexSDL2T r Spider (TriggerEventT Spider (PostBuildT Spider (PerformEventT Spider (SpiderHost Global))))
 
 
 ------------------------------------------------------------------------------
--- | Host a reflex-sdl2 app. This function is your application's main loop and
--- will not terminate.
+-- | Host a reflex-sdl2 app.
 host
   :: r
   -- ^ A user data value of type 'r'.
   -- Use 'getUserData' to access this value within your app network.
   -> ConcreteReflexSDL2 r ()
   -- ^ A concrete reflex-sdl2 network to run.
-  -> IO void
+  -> IO ()
 host sysUserData app = runSpiderHost $ do
   -- Get events and trigger refs for all things that can happen.
   (sysPostBuildEvent,                                 trPostBuildRef) <- newEventWithTriggerRef
@@ -566,25 +551,33 @@ host sysUserData app = runSpiderHost $ do
   -- placing them into a TVar. Push a new user event into the SDL event queue that
   -- will set off a read of the TVar and the firing of the triggers within the
   -- main loop.
+  -- Also - create som quit vars to communicate when our loops should absolutely end.
   chan        <- liftIO newChan
   triggersVar <- liftIO $ atomically $ newTVar []
+  sysQuitVar  <- liftIO newEmptyMVar
+  mainQuitVar <- liftIO $ atomically $ newTVar False
   let reservedTriggerCode = 31337
       isJustTriggerData dat _ =
         return $ guard $ registeredEventCode dat == reservedTriggerCode
       fromData () = return emptyRegisteredEvent{ registeredEventCode  = reservedTriggerCode }
-  registerEvent isJustTriggerData fromData >>= \case
+  pushTrig <- registerEvent isJustTriggerData fromData >>= \case
     Nothing -> error "Could not register an sdl event for TriggerEvent."
-    Just (RegisteredEventType pushTriggers _) ->
-      liftIO $ void $ async $ fix $ \loop -> do
-        trigs <- readChan chan
-        atomically $ do
-          prevTrigs <- readTVar triggersVar
-          writeTVar triggersVar $ prevTrigs ++ trigs
-        pushTriggers () >>= \case
-          EventPushSuccess   -> return ()
-          EventPushFiltered  -> putStrLn "trigger push filtered"
-          EventPushFailure t -> print t
-        loop
+    Just (RegisteredEventType pushTrig _) -> return pushTrig
+  asyncTrigger <- liftIO $ async $ fix $ \loop -> do
+    trigs <- readChan chan
+    atomically $ do
+      prevTrigs <- readTVar triggersVar
+      writeTVar triggersVar $ prevTrigs ++ trigs
+    pushTrig () >>= \case
+      EventPushSuccess   -> return ()
+      EventPushFiltered  -> putStrLn "trigger push filtered"
+      EventPushFailure t -> print t
+    loop
+  void $ liftIO $ async $ do
+    takeMVar sysQuitVar
+    atomically $ writeTVar mainQuitVar True
+    void $ pushTrig ()
+    cancel asyncTrigger
 
   ((), FireCommand fire) <-
     hostPerformEventT $ flip runPostBuildT sysPostBuildEvent
@@ -711,7 +704,8 @@ host sysUserData app = runSpiderHost $ do
       forM_ payloads $ \payload ->
         fire [tr :=> Identity payload] $ return ()
 
-    loop
+    shouldQuit <- liftIO $ readTVarIO mainQuitVar
+    unless shouldQuit loop
 
 
 ------------------------------------------------------------------------------
