@@ -1,17 +1,12 @@
 {-# LANGUAGE ConstraintKinds            #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures             #-}
 {-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE OverloadedStrings          #-}
-
-
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
-{-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}
@@ -27,9 +22,10 @@ module Reflex.SDL2
     -- * Gracefully shutting down an app
   , shutdownOn
 
-    -- * The reflex-sdl2 base type and constraints
-  , ReflexSDL2
+    -- * The reflex-sdl2 class, base transformer, common constraints and concrete stack
+  , HasSDL2Events
   , ReflexSDL2T
+  , ReflexSDL2
   , ConcreteReflexSDL2
 
     -- * Higher order switching
@@ -45,56 +41,8 @@ module Reflex.SDL2
     -- * Async events
   , getAsyncEvent
 
-    -- * User data
-  , getUserData
-  , userLocal
-  , swapUserData
-
     -- * Debugging
   , putDebugLnE
-
-    -- * SDL2 events
-  , getTicksEvent
-  , getAnySDLEvent
-  , getWindowShownEvent
-  , getWindowHiddenEvent
-  , getWindowExposedEvent
-  , getWindowMovedEvent
-  , getWindowResizedEvent
-  , getWindowSizeChangedEvent
-  , getWindowMinimizedEvent
-  , getWindowMaximizedEvent
-  , getWindowRestoredEvent
-  , getWindowGainedMouseFocusEvent
-  , getWindowLostMouseFocusEvent
-  , getWindowGainedKeyboardFocusEvent
-  , getWindowLostKeyboardFocusEvent
-  , getWindowClosedEvent
-  , getKeyboardEvent
-  , getTextEditingEvent
-  , getTextInputEvent
-  , getKeymapChangedEvent
-  , getMouseMotionEvent
-  , getMouseButtonEvent
-  , getMouseWheelEvent
-  , getJoyAxisEvent
-  , getJoyBallEvent
-  , getJoyHatEvent
-  , getJoyButtonEvent
-  , getJoyDeviceEvent
-  , getControllerAxisEvent
-  , getControllerButtonEvent
-  , getControllerDeviceEvent
-  , getAudioDeviceEvent
-  , getQuitEvent
-  , getUserEvent
-  , getSysWMEvent
-  , getTouchFingerEvent
-  , getMultiGestureEvent
-  , getDollarGestureEvent
-  , getDropEvent
-  , getClipboardUpdateEvent
-  , getUnknownEvent
 
     -- * Re-exports
   , module Reflex
@@ -106,8 +54,7 @@ module Reflex.SDL2
 import           Control.Concurrent       (newChan, newEmptyMVar, putMVar,
                                            readChan, takeMVar)
 import           Control.Concurrent.Async (async, cancel)
-import           Control.Monad            (forM_, void, unless)
-import           Control.Monad.Exception  (MonadException)
+import           Control.Monad            (forM_, unless, void)
 import           Control.Monad.Fix        (MonadFix)
 import           Control.Monad.Identity   (Identity (..))
 import           Control.Monad.IO.Class   (MonadIO, liftIO)
@@ -118,121 +65,31 @@ import           Data.Function            (fix)
 import           Data.Time.Clock          (NominalDiffTime, getCurrentTime)
 import           Data.Word                (Word32)
 import           GHC.Conc                 (atomically, newTVar, readTVar,
-                                           writeTVar, readTVarIO)
+                                           readTVarIO, writeTVar)
 import           Reflex                   hiding (Additive)
 import           Reflex.Host.Class
 import           Reflex.Time              (tickLossyFrom')
 import           SDL                      hiding (Event, delay)
 
+import           Reflex.SDL2.Base
+import           Reflex.SDL2.Class
 import           Reflex.SDL2.Internal
 
 
 ------------------------------------------------------------------------------
 -- | A collection of constraints that represent the default reflex-sdl2 network.
-type ReflexSDL2 r t m =
-  ( Reflex t
-  , MonadHold t m
-  , MonadSample t m
-  , Adjustable t m
-  , PostBuild t m
-  , PerformEvent t m
-  , TriggerEvent t m
-  , MonadFix m
-  , MonadIO m
-  , MonadIO (Performable m)
-  , MonadReader (SystemEvents r t) m
-  )
-
-
-------------------------------------------------------------------------------
--- | Run a @('Reader' 'SystemEvents' r t)@ computation with a modified
--- 'sysUserData' @r@.
-userLocal :: MonadReader (SystemEvents r t) m => (r -> r) -> m a -> m a
-userLocal f = local (\se -> se{sysUserData = f $ sysUserData se})
-
-
-------------------------------------------------------------------------------
--- | Provides a basic implementation of 'ReflexSDL2' constraints.
-newtype ReflexSDL2T r t (m :: * -> *) a =
-  ReflexSDL2T { unReflexSDL2T :: ReaderT (SystemEvents r t) m a }
-
-
--- TODO: Rethink user data and SystemEvents.
--- We shouldn't expect users to pack their reader data into `r` of `ReflexSDL2T r t m`.
--- Instead we should hide the `SystemEvents` reader, write Class.hs and Base.hs
--- modules - like `MonadSDL2` or something.
-
-
-runReflexSDL2T :: ReflexSDL2T r t m a -> SystemEvents r t -> m a
-runReflexSDL2T = runReaderT . unReflexSDL2T
-
-
-deriving instance (ReflexHost t, Functor m)        => Functor (ReflexSDL2T r t m)
-deriving instance (ReflexHost t, Applicative m)    => Applicative (ReflexSDL2T r t m)
-deriving instance (ReflexHost t, Monad m)          => Monad (ReflexSDL2T r t m)
-deriving instance (ReflexHost t, MonadFix m)       => MonadFix (ReflexSDL2T r t m)
-deriving instance (ReflexHost t, Monad m)          => MonadReader (SystemEvents r t) (ReflexSDL2T r t m)
-deriving instance (ReflexHost t, MonadIO m)        => MonadIO (ReflexSDL2T r t m)
-deriving instance ReflexHost t                     => MonadTrans (ReflexSDL2T r t)
-deriving instance (ReflexHost t, MonadException m) => MonadException (ReflexSDL2T r t m)
-deriving instance (ReflexHost t, TriggerEvent t m) => TriggerEvent t (ReflexSDL2T r t m)
-
-
-swapUserData :: s -> ReflexSDL2T s t m a -> ReflexSDL2T r t m a
-swapUserData rez (ReflexSDL2T f) = ReflexSDL2T $
-  withReaderT (\sys -> sys{ sysUserData = rez}) f
-
-
-------------------------------------------------------------------------------
--- | 'ReflexSDL2T' is an instance of 'PostBuild'.
-instance (Reflex t, PostBuild t m, ReflexHost t, Monad m) => PostBuild t (ReflexSDL2T r t m) where
-  getPostBuild = lift getPostBuild
-
-
-------------------------------------------------------------------------------
--- | 'ReflexSDL2T' is an instance of 'PerformEvent'.
-instance (ReflexHost t, PerformEvent t m) => PerformEvent t (ReflexSDL2T r t m) where
-  type Performable (ReflexSDL2T r t m) = ReflexSDL2T r t (Performable m)
-  performEvent_ = ReflexSDL2T . performEvent_ . fmap unReflexSDL2T
-  performEvent  = ReflexSDL2T . performEvent  . fmap unReflexSDL2T
-
-
-------------------------------------------------------------------------------
--- | 'ReflexSDL2T' is an instance of 'Adjustable'.
-instance ( Reflex t
-         , ReflexHost t
-         , Adjustable t m
-         , Monad m
-         --, PrimMonad (HostFrame t)
-         ) => Adjustable t (ReflexSDL2T r t m) where
-  runWithReplace ma evmb =
-    ReflexSDL2T $ runWithReplace (unReflexSDL2T ma) (unReflexSDL2T <$> evmb)
-  traverseDMapWithKeyWithAdjust kvma dMapKV = ReflexSDL2T .
-    traverseDMapWithKeyWithAdjust (\ka -> unReflexSDL2T . kvma ka) dMapKV
-  traverseDMapWithKeyWithAdjustWithMove kvma dMapKV = ReflexSDL2T .
-    traverseDMapWithKeyWithAdjustWithMove (\ka -> unReflexSDL2T . kvma ka) dMapKV
-  traverseIntMapWithKeyWithAdjust f im = ReflexSDL2T .
-    traverseIntMapWithKeyWithAdjust (\ka -> unReflexSDL2T . f ka) im
-
-
-------------------------------------------------------------------------------
--- | 'ReflexSDL2T' is an instance of 'MonadHold'.
-instance ( ReflexHost t
-         , Applicative m
-         , Monad m
-         , MonadSample t m
-         ) => MonadSample t (ReflexSDL2T r t m) where
-  sample = lift . sample
-
-
-------------------------------------------------------------------------------
--- | 'ReflexSDL2T' is an instance of 'MonadHold'.
-instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T r t m) where
-  hold a = lift . hold a
-  holdDyn a = lift . holdDyn a
-  holdIncremental p = lift . holdIncremental p
-  buildDynamic ma = lift . buildDynamic ma
-  headE = lift . headE
+type ReflexSDL2 t m = ( Reflex t
+                      , MonadHold t m
+                      , MonadSample t m
+                      , Adjustable t m
+                      , PostBuild t m
+                      , PerformEvent t m
+                      , TriggerEvent t m
+                      , MonadFix m
+                      , MonadIO m
+                      , MonadIO (Performable m)
+                      , HasSDL2Events t m
+                      )
 
 
 --------------------------------------------------------------------------------
@@ -240,10 +97,11 @@ instance (ReflexHost t, MonadHold t m) => MonadHold t (ReflexSDL2T r t m) where
 -- since the last frame.
 -- Be aware that subscribing to this 'Event' (by using it in a monadic action)
 -- will result in your app running sdl2's event loop every frame.
-getDeltaTickEvent :: ReflexSDL2 r t m => m (Event t Word32)
+getDeltaTickEvent
+  :: (MonadHold t m, MonadFix m, HasSDL2Events t m) => m (Event t Word32)
 getDeltaTickEvent = do
   let f (lastTick, _) thisTick = (thisTick, thisTick - lastTick)
-  evTickAndDel <- accum f (0, 0) =<< asks sysTicksEvent
+  evTickAndDel <- accum f (0, 0) =<< getTicksEvent
   return $ snd <$> evTickAndDel
 
 
@@ -269,7 +127,7 @@ tickLossyFromPostBuildTime dt = do
 
 -- | Populate the event value with the time in milliseconds since the last time
 -- the event fired.
-performEventDelta :: ReflexSDL2 r t m => Event t a -> m (Event t Word32)
+performEventDelta :: ReflexSDL2 t m => Event t a -> m (Event t Word32)
 performEventDelta ev = do
   tnow <- ticks
   evTicks <- performEvent $ ticks <$ ev
@@ -306,7 +164,7 @@ performEventDelta ev = do
 --
 --
 --getStorableUserEventWithEventCode
---  :: (ReflexSDL2 r t m, Storable a) => Int32 -> m (Event t a)
+--  :: (ReflexSDL2 t m, Storable a) => Int32 -> m (Event t a)
 --getStorableUserEventWithEventCode code = do
 --  evUser <- getUserEvent
 --  let evUserFilt = fmapMaybe (\udat -> udat <$ guard (code == userEventCode udat))
@@ -323,14 +181,14 @@ performEventDelta ev = do
 ---- Your 'a' type gets marshalled to C FFI and back, hence the
 ---- 'Storable' requirement.
 --getAsyncEventWithEventCode
---  :: (ReflexSDL2 r t m, Storable a) => Int32 -> IO a -> m (Event t a)
+--  :: (ReflexSDL2 t m, Storable a) => Int32 -> IO a -> m (Event t a)
 --getAsyncEventWithEventCode eventCode action = do
 --  registerAndPushAsync eventCode action
 --  getStorableUserEventWithEventCode eventCode
 
 
 --------------------------------------------------------------------------------
-getAsyncEvent :: ReflexSDL2 r t m => IO a -> m (Event t a)
+getAsyncEvent :: ReflexSDL2 t m => IO a -> m (Event t a)
 getAsyncEvent f = do
   (ev, g) <- newTriggerEvent
   void $ liftIO $ async $ f >>= g
@@ -340,167 +198,37 @@ getAsyncEvent f = do
 ----------------------------------------------------------------------------------
 ---- | Delays the given event by the given number of milliseconds.
 --delayEventWithEventCode
---  :: (ReflexSDL2 r t m, Storable a) => Int32 -> Int -> Event t a -> m (Event t a)
+--  :: (ReflexSDL2 t m, Storable a) => Int32 -> Int -> Event t a -> m (Event t a)
 --delayEventWithEventCode code millis ev = do
 --  performEvent_ $ ffor ev $ \a ->
 --    registerAndPushAsync code $ threadDelay (millis * 1000) >> return a
 --  getStorableUserEventWithEventCode code
 
 --------------------------------------------------------------------------------
--- SDL2 Events
---------------------------------------------------------------------------------
-getTicksEvent :: ReflexSDL2 r t m => m (Event t Word32)
-getTicksEvent = asks sysTicksEvent
-
-getAnySDLEvent :: ReflexSDL2 r t m => m (Event t EventPayload)
-getAnySDLEvent = asks sysAnySDLEvent
-
-getWindowShownEvent :: ReflexSDL2 r t m => m (Event t WindowShownEventData)
-getWindowShownEvent = asks sysWindowShownEvent
-
-getWindowHiddenEvent :: ReflexSDL2 r t m => m (Event t WindowHiddenEventData)
-getWindowHiddenEvent = asks sysWindowHiddenEvent
-
-getWindowExposedEvent :: ReflexSDL2 r t m => m (Event t WindowExposedEventData)
-getWindowExposedEvent = asks sysWindowExposedEvent
-
-getWindowMovedEvent :: ReflexSDL2 r t m => m (Event t WindowMovedEventData)
-getWindowMovedEvent = asks sysWindowMovedEvent
-
-getWindowResizedEvent :: ReflexSDL2 r t m => m (Event t WindowResizedEventData)
-getWindowResizedEvent = asks sysWindowResizedEvent
-
-getWindowSizeChangedEvent :: ReflexSDL2 r t m => m (Event t WindowSizeChangedEventData)
-getWindowSizeChangedEvent = asks sysWindowSizeChangedEvent
-
-getWindowMinimizedEvent :: ReflexSDL2 r t m => m (Event t WindowMinimizedEventData)
-getWindowMinimizedEvent = asks sysWindowMinimizedEvent
-
-getWindowMaximizedEvent :: ReflexSDL2 r t m => m (Event t WindowMaximizedEventData)
-getWindowMaximizedEvent = asks sysWindowMaximizedEvent
-
-getWindowRestoredEvent :: ReflexSDL2 r t m => m (Event t WindowRestoredEventData)
-getWindowRestoredEvent = asks sysWindowRestoredEvent
-
-getWindowGainedMouseFocusEvent :: ReflexSDL2 r t m => m (Event t WindowGainedMouseFocusEventData)
-getWindowGainedMouseFocusEvent = asks sysWindowGainedMouseFocusEvent
-
-getWindowLostMouseFocusEvent :: ReflexSDL2 r t m => m (Event t WindowLostMouseFocusEventData)
-getWindowLostMouseFocusEvent = asks sysWindowLostMouseFocusEvent
-
-getWindowGainedKeyboardFocusEvent :: ReflexSDL2 r t m => m (Event t WindowGainedKeyboardFocusEventData)
-getWindowGainedKeyboardFocusEvent = asks sysWindowGainedKeyboardFocusEvent
-
-getWindowLostKeyboardFocusEvent :: ReflexSDL2 r t m => m (Event t WindowLostKeyboardFocusEventData)
-getWindowLostKeyboardFocusEvent = asks sysWindowLostKeyboardFocusEvent
-
-getWindowClosedEvent :: ReflexSDL2 r t m => m (Event t WindowClosedEventData)
-getWindowClosedEvent = asks sysWindowClosedEvent
-
-getKeyboardEvent :: ReflexSDL2 r t m => m (Event t KeyboardEventData)
-getKeyboardEvent = asks sysKeyboardEvent
-
-getTextEditingEvent :: ReflexSDL2 r t m => m (Event t TextEditingEventData)
-getTextEditingEvent = asks sysTextEditingEvent
-
-getTextInputEvent :: ReflexSDL2 r t m => m (Event t TextInputEventData)
-getTextInputEvent = asks sysTextInputEvent
-
-getKeymapChangedEvent :: ReflexSDL2 r t m => m (Event t ())
-getKeymapChangedEvent = asks sysKeymapChangedEvent
-
-getMouseMotionEvent :: ReflexSDL2 r t m => m (Event t MouseMotionEventData)
-getMouseMotionEvent = asks sysMouseMotionEvent
-
-getMouseButtonEvent :: ReflexSDL2 r t m => m (Event t MouseButtonEventData)
-getMouseButtonEvent = asks sysMouseButtonEvent
-
-getMouseWheelEvent :: ReflexSDL2 r t m => m (Event t MouseWheelEventData)
-getMouseWheelEvent = asks sysMouseWheelEvent
-
-getJoyAxisEvent :: ReflexSDL2 r t m => m (Event t JoyAxisEventData)
-getJoyAxisEvent = asks sysJoyAxisEvent
-
-getJoyBallEvent :: ReflexSDL2 r t m => m (Event t JoyBallEventData)
-getJoyBallEvent = asks sysJoyBallEvent
-
-getJoyHatEvent :: ReflexSDL2 r t m => m (Event t JoyHatEventData)
-getJoyHatEvent = asks sysJoyHatEvent
-
-getJoyButtonEvent :: ReflexSDL2 r t m => m (Event t JoyButtonEventData)
-getJoyButtonEvent = asks sysJoyButtonEvent
-
-getJoyDeviceEvent :: ReflexSDL2 r t m => m (Event t JoyDeviceEventData)
-getJoyDeviceEvent = asks sysJoyDeviceEvent
-
-getControllerAxisEvent :: ReflexSDL2 r t m => m (Event t ControllerAxisEventData)
-getControllerAxisEvent = asks sysControllerAxisEvent
-
-getControllerButtonEvent :: ReflexSDL2 r t m => m (Event t ControllerButtonEventData)
-getControllerButtonEvent = asks sysControllerButtonEvent
-
-getControllerDeviceEvent :: ReflexSDL2 r t m => m (Event t ControllerDeviceEventData)
-getControllerDeviceEvent = asks sysControllerDeviceEvent
-
-getAudioDeviceEvent :: ReflexSDL2 r t m => m (Event t AudioDeviceEventData)
-getAudioDeviceEvent = asks sysAudioDeviceEvent
-
-getQuitEvent :: ReflexSDL2 r t m => m (Event t ())
-getQuitEvent = asks sysQuitEvent
-
-getUserEvent :: ReflexSDL2 r t m => m (Event t UserEventData)
-getUserEvent = asks sysUserEvent
-
-getSysWMEvent :: ReflexSDL2 r t m => m (Event t SysWMEventData)
-getSysWMEvent = asks sysSysWMEvent
-
-getTouchFingerEvent :: ReflexSDL2 r t m => m (Event t TouchFingerEventData)
-getTouchFingerEvent = asks sysTouchFingerEvent
-
-getMultiGestureEvent :: ReflexSDL2 r t m => m (Event t MultiGestureEventData)
-getMultiGestureEvent = asks sysMultiGestureEvent
-
-getDollarGestureEvent :: ReflexSDL2 r t m => m (Event t DollarGestureEventData)
-getDollarGestureEvent = asks sysDollarGestureEvent
-
-getDropEvent :: ReflexSDL2 r t m => m (Event t DropEventData)
-getDropEvent = asks sysDropEvent
-
-getClipboardUpdateEvent :: ReflexSDL2 r t m => m (Event t ())
-getClipboardUpdateEvent = asks sysClipboardUpdateEvent
-
-getUnknownEvent :: ReflexSDL2 r t m => m (Event t UnknownEventData)
-getUnknownEvent = asks sysUnknownEvent
-
-getUserData :: ReflexSDL2 r t m => m r
-getUserData = asks sysUserData
-
-
---------------------------------------------------------------------------------
 -- $grace
 -- | Will exit the main reflex-sdl2 loop when the given Event fires. This allows
 -- the programmer to shut down the network before shutting down SDL.
-shutdownOn :: ReflexSDL2 r t m => Event t () -> m ()
+shutdownOn
+  :: (PerformEvent t m, MonadIO (Performable m), HasSDL2Events t m)
+  => Event t ()
+  -> m ()
 shutdownOn ev = do
-  var <- asks sysQuitVar
+  var <- getQuitVar
   performEvent_ $ liftIO (putMVar var ()) <$ ev
 
 
 --------------------------------------------------------------------------------
--- | The pretty much monomorphic type used to run reflex-sdl2 apps.
-type ConcreteReflexSDL2 r = ReflexSDL2T r Spider (TriggerEventT Spider (PostBuildT Spider (PerformEventT Spider (SpiderHost Global))))
+-- | The monomorphic type used to run reflex-sdl2 apps.
+type ConcreteReflexSDL2 = ReflexSDL2T Spider (TriggerEventT Spider (PostBuildT Spider (PerformEventT Spider (SpiderHost Global))))
 
 
 ------------------------------------------------------------------------------
 -- | Host a reflex-sdl2 app.
 host
-  :: r
-  -- ^ A user data value of type 'r'.
-  -- Use 'getUserData' to access this value within your app network.
-  -> ConcreteReflexSDL2 r ()
+  :: ConcreteReflexSDL2 ()
   -- ^ A concrete reflex-sdl2 network to run.
   -> IO ()
-host sysUserData app = runSpiderHost $ do
+host app = runSpiderHost $ do
   -- Get events and trigger refs for all things that can happen.
   (sysPostBuildEvent,                                 trPostBuildRef) <- newEventWithTriggerRef
   (sysAnySDLEvent,                                       trAnySDLRef) <- newEventWithTriggerRef
@@ -725,7 +453,7 @@ putDebugLnE ev showf = performEvent_ $ liftIO . putStrLn . showf <$> ev
 -- with the network of the 'Event's value. This process is repeated each time
 -- the 'Event' fires a new network. Returns a 'Dynamic' of the inner network's
 -- result that updates any time the 'Event' fires.
-holdView :: ReflexSDL2 r t m => m a -> Event t (m a) -> m (Dynamic t a)
+holdView :: ReflexSDL2 t m => m a -> Event t (m a) -> m (Dynamic t a)
 holdView child0 newChild = do
   (result0, newResult) <- runWithReplace child0 newChild
   holdDyn result0 newResult
@@ -735,7 +463,7 @@ holdView child0 newChild = do
 -- | Run a 'Dynamic'ally changing network, replacing the current one with the
 -- new one every time the 'Dynamic' updates. Returns an 'Event' of the inner
 -- network's result value that fires every time the 'Dynamic' changes.
-dynView :: ReflexSDL2 r t m => Dynamic t (m a) -> m (Event t a)
+dynView :: ReflexSDL2 t m => Dynamic t (m a) -> m (Event t a)
 dynView child = do
   evPB <- getPostBuild
   let newChild = leftmost [updated child, tagCheap (current child) evPB]
