@@ -7,10 +7,10 @@
 {-# LANGUAGE UndecidableInstances  #-}
 module Main where
 
-import           Control.Concurrent (threadDelay)
-import           Control.Monad      (forM_, guard, void)
+import           Control.Concurrent   (threadDelay)
+import           Control.Monad        (forM_, guard, void)
+import           Control.Monad.Reader (MonadReader (..), runReaderT)
 import           Reflex.SDL2
-import           System.Exit        (exitSuccess)
 
 
 --------------------------------------------------------------------------------
@@ -48,14 +48,14 @@ type Layer m = Performable m ()
 
 ----------------------------------------------------------------------
 -- | Commit a layer stack that changes over time.
-commitLayers :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
+commitLayers :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m)
       => Dynamic t [Layer m] -> m ()
 commitLayers = tellDyn
 
 
 ----------------------------------------------------------------------
 -- | Commit one layer that changes over time.
-commitLayer :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
+commitLayer :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m)
             => Dynamic t (Layer m) -> m ()
 commitLayer = tellDyn . fmap pure
 
@@ -81,10 +81,10 @@ buttonState isInside isDown
   | otherwise    = ButtonStateOver
 
 
-button :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
-       => Renderer
-       -> m (Event t ButtonState)
-button r = do
+button
+  :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m, MonadReader Renderer m)
+  => m (Event t ButtonState)
+button = do
   evMotionData <- getMouseMotionEvent
   let position = V2 100 100
       size     = V2 100 100
@@ -104,6 +104,7 @@ button r = do
   dButtonState <- holdDyn ButtonStateUp $ leftmost [ updated dButtonStatePre
                                                    , ButtonStateUp <$ evPB
                                                    ]
+  r <- ask
   commitLayer $ ffor dButtonState $ \st -> do
     let color = case st of
                   ButtonStateUp   -> V4 192 192 192 255
@@ -116,19 +117,23 @@ button r = do
 
 
 guest
-  :: (ReflexSDL2 r t m, MonadDynamicWriter t [Layer m] m)
-  => Renderer
-  -> m ()
-guest r = do
+  :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m, MonadReader Renderer m)
+  => m ()
+guest = do
   -- Print some stuff after the network is built.
   evPB <- getPostBuild
   performEvent_ $ ffor evPB $ \() ->
     liftIO $ putStrLn "starting up..."
+
+  ------------------------------------------------------------------------------
+  -- Get a handle on our renderer
+  ------------------------------------------------------------------------------
+  r <- ask
   ------------------------------------------------------------------------------
   -- Test async events.
   -- This will wait three seconds before coloring the background black.
   ------------------------------------------------------------------------------
-  evDelay <- getAsyncEventWithEventCode 0xBEEF $ threadDelay 3000000
+  evDelay <- getAsyncEvent $ threadDelay 3000000
   dDelay  <- holdDyn False $ True <$ evDelay
   commitLayers $ ffor dDelay $ \case
     False -> pure $ do
@@ -141,7 +146,7 @@ guest r = do
   ------------------------------------------------------------------------------
   -- A button!
   ------------------------------------------------------------------------------
-  evBtnState <- button r
+  evBtnState <- button
   let evBtnPressed = fmapMaybe (guard . (== ButtonStateDown)) evBtnState
   performEvent_ $ ffor evBtnPressed $ const $ liftIO $ putStrLn "Button pressed!"
 
@@ -181,7 +186,7 @@ guest r = do
   ------------------------------------------------------------------------------
   evKey <- getKeyboardEvent
   let evKeyNoRepeat = fmapMaybe (\k -> k <$ guard (not $ keyboardEventRepeat k)) evKey
-  dPressed <- holdDyn False $ ((== Pressed) . keyboardEventKeyMotion) <$> evKeyNoRepeat
+  dPressed <- holdDyn False $ (== Pressed) . keyboardEventKeyMotion <$> evKeyNoRepeat
   void $ holdView (return ()) $ ffor (updated dPressed) $ \case
     False -> return ()
     True  -> do
@@ -201,21 +206,42 @@ guest r = do
   -- Test our recurring timer events
   ------------------------------------------------------------------------------
   let performDeltaSecondTimer n = do
-        evEverySecond  <- getRecurringTimerEventWithEventCode n $ fromIntegral n * 1000
-        dSeconds       <- foldDyn (+) (0 :: Int) $ 1 <$ evEverySecond
-        evSecondsDelta <- performEventDelta $ updated dSeconds
-        dSecondsDelta  <- holdDyn 0 evSecondsDelta
-        putDebugLnE (updated $ zipDynWith (,) dSeconds dSecondsDelta) $ (show n ++) . (": " ++) . show
+        evDelta  <- performEventDelta =<< tickLossyFromPostBuildTime n
+        dTicks   <- foldDyn (+) 0 $ (1 :: Int) <$ evDelta
+        dDelta   <- holdDyn 0 evDelta
+        dElapsed <- foldDyn (+) 0 evDelta
+        flip putDebugLnE id $ updated $ do
+          tickz <- dTicks
+          lapse <- dElapsed
+          delta <- dDelta
+          return $ unwords [ show n
+                           , "timer -"
+                           , show tickz
+                           , "ticks -"
+                           , show lapse
+                           , "lapsed -"
+                           , show delta
+                           , "delta since last tick"
+                           ]
   performDeltaSecondTimer 1
-  performDeltaSecondTimer 2
 
   ------------------------------------------------------------------------------
   -- Quit on a quit event
   ------------------------------------------------------------------------------
   evQuit <- getQuitEvent
-  performEvent_ $ ffor evQuit $ \() -> liftIO $ do
-    putStrLn "bye!"
-    exitSuccess
+  performEvent_ $ liftIO (putStrLn "bye!") <$ evQuit
+  shutdownOn =<< delay 0 evQuit
+
+
+app :: (ReflexSDL2 t m, MonadReader Renderer m) => m ()
+app = do
+  (_, dynLayers) <- runDynamicWriterT guest
+  r <- ask
+  performEvent_ $ ffor (updated dynLayers) $ \layers -> do
+    rendererDrawColor r $= V4 0 0 0 255
+    clear r
+    sequence_ layers
+    present r
 
 
 main :: IO ()
@@ -233,10 +259,9 @@ main = do
   putStrLn "creating renderer..."
   r <- createRenderer window (-1) defaultRenderer
   rendererDrawBlendMode r $= BlendAlphaBlend
-  host () $ do
-    (_, dynLayers) <- runDynamicWriterT $ guest r
-    performEvent_ $ ffor (updated dynLayers) $ \layers -> do
-      rendererDrawColor r $= V4 0 0 0 255
-      clear r
-      sequence_ layers
-      present r
+  -- Host the network with an example of how to embed your own effects.
+  -- In thi case it's a simple reader.
+  host $ runReaderT app r
+  destroyRenderer r
+  destroyWindow window
+  quit

@@ -4,9 +4,10 @@
 -- need them :)
 module Reflex.SDL2.Internal where
 
-import           Data.Word                   (Word32)
-import           Reflex                      (Event)
-import           SDL                         hiding (Event)
+import           Control.Concurrent (MVar)
+import           Data.Word          (Word32)
+import           Reflex             (Event)
+import           SDL                hiding (Event)
 
 ------------------------------------------------------------------------------
 -- | Holds a slot of 'Event' for each kind of SDL2 event plus a couple extras:
@@ -16,7 +17,7 @@ import           SDL                         hiding (Event)
 -- An event for reflex's post network build event.
 --
 -- An event for each frame tick.
-data SystemEvents r t = SystemEvents
+data SystemEvents t = SystemEvents
   { sysPostBuildEvent                 :: Event t ()
   -- ^ Fired just after the FRP network is built.
   , sysTicksEvent                     :: Event t Word32
@@ -64,6 +65,6 @@ data SystemEvents r t = SystemEvents
   , sysDropEvent                      :: Event t DropEventData
   , sysClipboardUpdateEvent           :: Event t ()
   , sysUnknownEvent                   :: Event t UnknownEventData
-  , sysUserData                       :: r
-  -- ^ A slot to hold any custom user data.
+  , sysQuitVar                        :: MVar ()
+  -- ^ A var to sync quitting.
   }
