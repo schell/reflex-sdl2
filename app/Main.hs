@@ -260,7 +260,7 @@ main = do
   r <- createRenderer window (-1) defaultRenderer
   rendererDrawBlendMode r $= BlendAlphaBlend
   -- Host the network with an example of how to embed your own effects.
-  -- In thi case it's a simple reader.
+  -- In this case it's a simple reader.
   host $ runReaderT app r
   destroyRenderer r
   destroyWindow window
