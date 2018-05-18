@@ -22,10 +22,13 @@ module Reflex.SDL2
     -- * Gracefully shutting down an app
   , shutdownOn
 
-    -- * The reflex-sdl2 class, base transformer, common constraints and concrete stack
-  , HasSDL2Events
+    -- * The reflex-sdl2 class
+  , HasSDL2Events (..)
+    -- * Base transformer
   , ReflexSDL2T
+    -- * Common constraints (most powerful but convenient)
   , ReflexSDL2
+    -- * Concrete stack
   , ConcreteReflexSDL2
 
     -- * Higher order switching
@@ -134,59 +137,6 @@ performEventDelta ev = do
   fmap fst <$> accum (\(_, prev) now -> (now - prev, now)) (0, tnow) evTicks
 
 
---readAndFreePtr :: Storable a => Ptr () -> IO a
---readAndFreePtr ptr = do
---  a <- peek $ castPtr ptr
---  free ptr
---  return a
---
---
---registerAndPushAsync :: (MonadIO m, Storable a) => Int32 -> IO a -> m ()
---registerAndPushAsync eventCode action = do
---  let toData rdat _
---        | eventCode == registeredEventCode rdat =
---          Just <$> readAndFreePtr (registeredEventData1 rdat)
---        | otherwise = return Nothing
---      fromData a = do
---        ptr <- malloc
---        poke ptr a
---        return $ emptyRegisteredEvent{ registeredEventCode  = eventCode
---                                     , registeredEventData1 = castPtr ptr
---                                     }
---  registerEvent toData fromData >>= \case
---    Nothing -> return ()
---    Just (RegisteredEventType pushIt _) -> liftIO $ void $ async $ do
---      a <- action
---      pushIt a >>= \case
---        EventPushSuccess -> return ()
---        EventPushFiltered -> putStrLn "async push filtered"
---        EventPushFailure t -> print t
---
---
---getStorableUserEventWithEventCode
---  :: (ReflexSDL2 t m, Storable a) => Int32 -> m (Event t a)
---getStorableUserEventWithEventCode code = do
---  evUser <- getUserEvent
---  let evUserFilt = fmapMaybe (\udat -> udat <$ guard (code == userEventCode udat))
---                             evUser
---  performEvent $ liftIO . readAndFreePtr . userEventData1 <$> evUserFilt
---
---
-----------------------------------------------------------------------------------
----- | Executes the given IO action in a separate thread asynchronously and
----- returns an 'Event' that fires on the main thread with the result value
----- of that action. This uses sdl2's user events system, which requires that
----- the action result have an instance of 'Storable'.
-----
----- Your 'a' type gets marshalled to C FFI and back, hence the
----- 'Storable' requirement.
---getAsyncEventWithEventCode
---  :: (ReflexSDL2 t m, Storable a) => Int32 -> IO a -> m (Event t a)
---getAsyncEventWithEventCode eventCode action = do
---  registerAndPushAsync eventCode action
---  getStorableUserEventWithEventCode eventCode
-
-
 --------------------------------------------------------------------------------
 getAsyncEvent :: ReflexSDL2 t m => IO a -> m (Event t a)
 getAsyncEvent f = do
@@ -194,15 +144,6 @@ getAsyncEvent f = do
   void $ liftIO $ async $ f >>= g
   return ev
 
-
-----------------------------------------------------------------------------------
----- | Delays the given event by the given number of milliseconds.
---delayEventWithEventCode
---  :: (ReflexSDL2 t m, Storable a) => Int32 -> Int -> Event t a -> m (Event t a)
---delayEventWithEventCode code millis ev = do
---  performEvent_ $ ffor ev $ \a ->
---    registerAndPushAsync code $ threadDelay (millis * 1000) >> return a
---  getStorableUserEventWithEventCode code
 
 --------------------------------------------------------------------------------
 -- $grace
