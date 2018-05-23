@@ -5,13 +5,13 @@
 module Reflex.SDL2.Class where
 
 
-import           Control.Concurrent   (MVar)
-import           Control.Monad.Reader (ReaderT)
-import           Control.Monad.Trans  (lift)
-import           Data.Word            (Word32)
-import           Reflex               (Event, Reflex)
-import           Reflex.DynamicWriter (DynamicWriterT)
-import           SDL                  hiding (Event)
+import           Control.Concurrent        (MVar)
+import           Control.Monad.Reader      (ReaderT)
+import           Control.Monad.Trans       (lift)
+import           Data.Word                 (Word32)
+import           Reflex                    (Event, Reflex)
+import           Reflex.DynamicWriter.Base (DynamicWriterT)
+import           SDL                       hiding (Event)
 
 
 class (Reflex t, Monad m) => HasSDL2Events t m | m -> t where

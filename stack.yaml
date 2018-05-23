@@ -38,8 +38,8 @@ resolver: nightly-2017-11-02
 packages:
 - '.'
 - location:
-    git: https://github.com/schell/reflex
-    commit: fc69b9793218578e76e6eb79991ccdf665c88636
+    git: https://github.com/reflex-frp/reflex
+    commit: develop
   extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
@@ -53,10 +53,6 @@ flags: {}
 
 # Extra package databases containing global packages
 extra-package-dbs: []
-
-nix:
-  enable: false
-  packages: [ SDL2 ]
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true

@@ -37,7 +37,6 @@ module Reflex.SDL2
 
     -- * Time and recurring timer events
   , TickInfo(..)
-  , tickLossyFromPostBuildTime
   , getDeltaTickEvent
   , performEventDelta
 
@@ -65,7 +64,6 @@ import           Control.Monad.Reader
 import           Control.Monad.Ref        (readRef)
 import           Data.Dependent.Sum       (DSum ((:=>)))
 import           Data.Function            (fix)
-import           Data.Time.Clock          (NominalDiffTime, getCurrentTime)
 import           Data.Word                (Word32)
 import           GHC.Conc                 (atomically, newTVar, readTVar,
                                            readTVarIO, writeTVar)
@@ -106,26 +104,6 @@ getDeltaTickEvent = do
   let f (lastTick, _) thisTick = (thisTick, thisTick - lastTick)
   evTickAndDel <- accum f (0, 0) =<< getTicksEvent
   return $ snd <$> evTickAndDel
-
-
--- | Special case of 'tickLossyFrom' that uses the post-build event to start the
---   tick thread and the time of the post-build as the tick basis time.
---
--- TODO: Update reflex to the version that includes `tickLosyFromPostBuildTime`.
--- Then we can remove this from here, since it's provided by reflex itself.
-tickLossyFromPostBuildTime
-  :: ( PostBuild t m
-     , PerformEvent t m
-     , TriggerEvent t m
-     , MonadIO (Performable m)
-     , MonadFix m
-     )
-  => NominalDiffTime
-  -> m (Event t TickInfo)
-tickLossyFromPostBuildTime dt = do
-  postBuild <- getPostBuild
-  postBuildTime <- performEvent $ liftIO getCurrentTime <$ postBuild
-  tickLossyFrom' $ (dt,) <$> postBuildTime
 
 
 -- | Populate the event value with the time in milliseconds since the last time
