@@ -39,7 +39,7 @@ packages:
 - '.'
 - location:
     git: https://github.com/reflex-frp/reflex
-    commit: develop
+    commit: 5d9c8a00f2eb832f109c870963182149b988062a
   extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
