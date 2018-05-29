@@ -5,7 +5,7 @@
 sudo: false
 
 # Choose a lightweight base image; we provide our own build tools.
-language: nix
+language: c
 
 # Caching so the next build will be fast too.
 cache:
@@ -102,6 +102,14 @@ before_install:
 
 # Get the list of packages from the stack.yaml file
 - PACKAGES=$(stack --install-ghc query locals | grep '^ *path' | sed 's@^ *path:@@')
+
+# Download, make and install SDL2-2.0.8 (stable)
+- |
+  travis_retry curl -L https://www.libsdl.org/release/SDL2-2.0.8.tar.gz | tar xz
+  cd SDL2-2.0.8
+  ./configure
+  make
+  sudo make install
 
 install:
 - echo "$(ghc --version) [$(ghc --print-project-git-commit-id 2> /dev/null || echo '?')]"
