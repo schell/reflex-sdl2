@@ -1,5 +1,7 @@
 # reflex-sdl2
 
+![status](https://gitlab.com/schell/source-of-truth/badges/master/build.svg)
+
 This is a [reflex][2] host for [sdl2][0].
 
 Writing and running [sdl2][0] apps requires version 2 of the awesome [SDL][1]
