@@ -1,5 +1,5 @@
 name:                reflex-sdl2
-version:             0.2.0.1
+version:             0.3.0.0
 synopsis:            SDL2 and reflex FRP
 description:         A minimal host for sdl2 based reflex apps.
 homepage:            https://github.com/schell/reflex-sdl2#readme
