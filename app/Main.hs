@@ -10,6 +10,7 @@ module Main where
 import           Control.Concurrent   (threadDelay)
 import           Control.Monad        (forM_, guard, void)
 import           Control.Monad.Reader (MonadReader (..), runReaderT)
+import           Reflex
 import           Reflex.SDL2
 
 
