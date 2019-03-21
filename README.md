@@ -1,6 +1,6 @@
 # reflex-sdl2
 
-![status](https://gitlab.com/schell/source-of-truth/badges/master/build.svg)
+![status](https://gitlab.com/schell/reflex-sdl2/badges/master/build.svg)
 
 This is a [reflex][2] host for [sdl2][0].
 
