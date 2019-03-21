@@ -15,7 +15,7 @@
 # resolver:
 #  name: custom-snapshot
 #  location: "./custom-snapshot.yaml"
-resolver: nightly-2017-11-02
+resolver: lts-12.1
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -37,16 +37,14 @@ resolver: nightly-2017-11-02
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
-- location:
-    git: https://github.com/reflex-frp/reflex
-    commit: 5d9c8a00f2eb832f109c870963182149b988062a
-  extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
+- git: https://github.com/reflex-frp/reflex
+  commit: 5d9c8a00f2eb832f109c870963182149b988062a
 - prim-uniq-0.1.0.1
 - ref-tf-0.4.0.1
-- sdl2-2.3.0
+- sdl2-2.4.1.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}
