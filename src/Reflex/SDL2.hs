@@ -47,7 +47,6 @@ module Reflex.SDL2
   , putDebugLnE
 
     -- * Re-exports
-  , module Reflex
   , module SDL
   , MonadIO
   , liftIO
