@@ -47,7 +47,6 @@ module Reflex.SDL2
   , putDebugLnE
 
     -- * Re-exports
-  , module Reflex
   , module SDL
   , MonadIO
   , liftIO
@@ -69,7 +68,6 @@ import           GHC.Conc                 (atomically, newTVar, readTVar,
                                            readTVarIO, writeTVar)
 import           Reflex                   hiding (Additive)
 import           Reflex.Host.Class
-import           Reflex.Time              (tickLossyFrom')
 import           SDL                      hiding (Event, delay)
 
 import           Reflex.SDL2.Base

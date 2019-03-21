@@ -1,5 +1,5 @@
 name:                reflex-sdl2
-version:             0.2.0.1
+version:             0.3.0.0
 synopsis:            SDL2 and reflex FRP
 description:         A minimal host for sdl2 based reflex apps.
 homepage:            https://github.com/schell/reflex-sdl2#readme
@@ -22,7 +22,7 @@ library
                      , Reflex.SDL2.Base
   build-depends:       async                  >= 2.1   && < 2.3
                      , base                   >= 4.7   && < 5
-                     , containers             >= 0.5   && < 0.6
+                     , containers             >= 0.5   && < 0.7
                      , dependent-sum          >= 0.4   && < 0.5
                      , exception-transformers >= 0.4   && < 0.5
                      , ref-tf                 >= 0.4   && < 0.5
@@ -30,7 +30,7 @@ library
                      , primitive              >= 0.6   && < 0.7
                      , reflex                 >= 0.5   && < 0.6
                      , sdl2                   >= 2.3   && < 2.5
-                     , stm                    >= 2.4   && < 2.5
+                     , stm                    >= 2.4   && < 2.6
 
   default-language:    Haskell2010
 
@@ -40,6 +40,7 @@ executable reflex-sdl2-exe
   ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , mtl
+                     , reflex                 >= 0.5   && < 0.6
                      , reflex-sdl2
   default-language:    Haskell2010
 
