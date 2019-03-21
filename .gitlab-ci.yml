@@ -8,7 +8,7 @@ build:
   stage: build
   script:
   - apt-get update -y
-  - apt-get install -y wget libsdl2-dev libgmp
+  - apt-get install -y wget libsdl2-dev
   - wget -qO- https://get.haskellstack.org/ | sh
   - export STACK_ROOT=`pwd`/.stack
   - stack setup
