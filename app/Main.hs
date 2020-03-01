@@ -49,14 +49,14 @@ type Layer m = Performable m ()
 
 ----------------------------------------------------------------------
 -- | Commit a layer stack that changes over time.
-commitLayers :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m)
+commitLayers :: (ReflexSDL2 t m, DynamicWriter t [Layer m] m)
       => Dynamic t [Layer m] -> m ()
 commitLayers = tellDyn
 
 
 ----------------------------------------------------------------------
 -- | Commit one layer that changes over time.
-commitLayer :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m)
+commitLayer :: (ReflexSDL2 t m, DynamicWriter t [Layer m] m)
             => Dynamic t (Layer m) -> m ()
 commitLayer = tellDyn . fmap pure
 
@@ -83,7 +83,7 @@ buttonState isInside isDown
 
 
 button
-  :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m, MonadReader Renderer m)
+  :: (ReflexSDL2 t m, DynamicWriter t [Layer m] m, MonadReader Renderer m)
   => m (Event t ButtonState)
 button = do
   evMotionData <- getMouseMotionEvent
@@ -118,7 +118,7 @@ button = do
 
 
 guest
-  :: (ReflexSDL2 t m, MonadDynamicWriter t [Layer m] m, MonadReader Renderer m)
+  :: (ReflexSDL2 t m, DynamicWriter t [Layer m] m, MonadReader Renderer m)
   => m ()
 guest = do
   -- Print some stuff after the network is built.
@@ -249,10 +249,10 @@ main :: IO ()
 main = do
   initializeAll
   let ogl = defaultOpenGL{ glProfile = Core Debug 3 3 }
-      cfg = defaultWindow{ windowOpenGL      = Just ogl
-                         , windowResizable   = True
-                         , windowHighDPI     = False
-                         , windowInitialSize = V2 640 480
+      cfg = defaultWindow{ windowGraphicsContext = OpenGLContext ogl
+                         , windowResizable       = True
+                         , windowHighDPI         = False
+                         , windowInitialSize     = V2 640 480
                          }
   window <- createWindow "reflex-sdl2-exe" cfg
   void $ glCreateContext window
