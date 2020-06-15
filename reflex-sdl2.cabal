@@ -1,5 +1,5 @@
 name:                reflex-sdl2
-version:             0.3.0.0
+version:             0.3.0.1
 synopsis:            SDL2 and reflex FRP
 description:         A minimal host for sdl2 based reflex apps.
 homepage:            https://github.com/schell/reflex-sdl2#readme
@@ -27,7 +27,6 @@ library
                      , exception-transformers >= 0.4   && < 0.5
                      , ref-tf                 >= 0.4   && < 0.5
                      , mtl                    >= 2.2   && < 2.3
-                     , primitive              >= 0.6   && < 0.7
                      , reflex                 >= 0.6   && < 0.7
                      , sdl2                   >= 2.5   && < 2.6
                      , stm                    >= 2.4   && < 2.6
