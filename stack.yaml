@@ -15,7 +15,7 @@
 # resolver:
 #  name: custom-snapshot
 #  location: "./custom-snapshot.yaml"
-resolver: lts-14.21
+resolver: lts-16.31
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -40,14 +40,16 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
-- constraints-extras-0.3.0.2
-- dependent-map-0.3
-- dependent-sum-0.6.2.0
-- monoidal-containers-0.6.0.1
-- patch-0.0.3.1
-- ref-tf-0.4.0.2
-- reflex-0.6.4
-- witherable-0.3.1
+- dependent-sum-0.7.1.0@sha256:5599aa89637db434431b1dd3fa7c34bc3d565ee44f0519bfbc877be1927c2531,2068
+- ref-tf-0.4.0.2@sha256:69de3550250e0cd69f45d080359cb314a9487c915024349c75b78732bbee9332,1134
+- reflex-0.8.0.0@sha256:e50de03568818072e2811211431ffe9811aeed69f3b24104b1dafb1b6fd0a525,11942
+- constraints-extras-0.3.0.2@sha256:013b8d0392582c6ca068e226718a4fe8be8e22321cc0634f6115505bf377ad26,1853
+- dependent-map-0.4.0.0@sha256:ca2b131046f4340a1c35d138c5a003fe4a5be96b14efc26291ed35fd08c62221,1657
+- monoidal-containers-0.6.0.1@sha256:ffdfae0fde7a08e9e314667a78d86454d2d23137d85f226ec6e757c190fb28ad,2583
+- patch-0.0.3.2@sha256:b4d3a60db88a04030392a06076defb9fe310a79577df7ff63ea2bb0298817b8d,2452
+- prim-uniq-0.2@sha256:7bfd8a729812bf212610b63459b76a086ecd5ce48f48d785c288e082d055d47b,1403
+- some-1.0.1@sha256:26e5bab7276f48b25ea8660d3fd1166c0f20fd497dac879a40f408e23211f93e,2055
+- witherable-0.3.5@sha256:6590a15735b50ac14dcc138d4265ff1585d5f3e9d3047d5ebc5abf4cd5f50084,1476
 
 # Override default flag values for local packages and extra-deps
 flags: {}
